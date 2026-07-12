@@ -45,7 +45,7 @@
   - `platforms/android-36`（含 `android.jar`）
   - 两者版本可用环境变量 `BUILD_TOOLS_VERSION` / `COMPILE_SDK_VERSION` 覆盖
 - **JDK 11+**（`javac` 用于编译，`apksigner` 为 jar 运行）
-- **platform 签名密钥**：放在仓库根 `sign/` 目录（见「安全与密钥管理」）
+- **platform 签名密钥**：放在仓库根 `sign/` 目录
 
 无需 Gradle / Android Studio，全程使用 AOSP 命令行工具。
 
@@ -54,7 +54,7 @@
 ## 本地构建
 
 ```bash
-# 1. 准备 sign/ 目录（私钥不入库，本地保管）
+# 1. 准备 sign/ 目录：
 #    sign/platform.pk8
 #    sign/platform.x509.pem
 
@@ -83,12 +83,12 @@ ANDROID_HOME=/your/sdk BUILD_TOOLS_VERSION=36.0.0 COMPILE_SDK_VERSION=36 \
 ## CI 自动构建（GitHub Actions）
 
 仓库已配置 `.github/workflows/build.yml`：推送 `main` 或手动 `Run workflow` 即触发。
-它在 Ubuntu 上自动安装 JDK、Android SDK，并从 **加密 Secrets** 还原 platform 私钥后签名，
-最后把 `ADBManager_signed.apk` 作为 **Artifacts** 产出——协作者无需本地持有私钥即可拿到签名包。
+它在 Ubuntu 上自动安装 JDK、Android SDK，从 **加密 Secrets** 还原签名文件后构建，
+最后把 `ADBManager_signed.apk` 作为 **Artifacts** 产出。
 
 ### 配置 Secrets（一次性）
 
-在仓库 `Settings → Secrets and variables → Actions` 新建两个 **Repository secret**，值为本地私钥的 base64：
+在仓库 `Settings → Secrets and variables → Actions` 新建两个 **Repository secret**：
 
 ```bash
 base64 -i sign/platform.pk8       # 复制整行 -> 变量名 PLATFORM_PK8_B64
@@ -128,23 +128,11 @@ ADBManager/
 │   │   ├── AdbService.java            # 常驻后台服务，开机恢复无线 ADB
 │   │   └── BootReceiver.java          # 开机广播拉起服务
 │   └── res/                           # 布局 / 字符串 / 图标
-├── sign/                              # platform 私钥（不入库，仅本地 + CI Secrets）
+├── sign/                              # platform 签名文件（不入库）
 ├── tools/apksigner.jar                # 签名工具（已入库）
 ├── build.sh                           # 纯 SDK 命令行构建脚本
 └── .github/workflows/build.yml        # CI 签名构建
 ```
-
----
-
-## 安全与密钥管理
-
-- `sign/` 目录（含 `platform.pk8` 私钥）**已被 `.gitignore` 忽略，绝不入库**；
-  它只存在于你的本地机器与 GitHub 加密 Secrets 中。
-- **私钥即系统信任根**：任何拿到 `platform.pk8` 的人都能签出同 ROM 家族的任意系统级 App。
-  务必单独备份（U 盘 / 密码管理器），丢失将无法签出兼容本车 ROM 的更新包。
-- 反编译 `ADBManager_signed.apk` **只能得到代码与公钥证书，无法还原私钥**；但代码逻辑会暴露，
-  请勿将 APK 随意分发给不可信方。
-- 切勿把 `sign/` 加进版本库，也不要在 issue / PR 中粘贴私钥内容。
 
 ---
 
