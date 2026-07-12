@@ -1,0 +1,331 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#1A1A1A"
+    android:orientation="vertical"
+    android:paddingLeft="12dp"
+    android:paddingRight="12dp"
+    android:paddingTop="0dp"
+    android:paddingBottom="0dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="#2D2D2D"
+        android:padding="12dp"
+        android:layout_marginBottom="8dp">
+
+        <View
+            android:id="@+id/status_indicator"
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:background="@drawable/status_circle"
+            android:layout_marginRight="10dp"
+            android:layout_gravity="center_vertical"/>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tv_status"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="ADB: 检测中..."
+                android:textSize="20sp"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"/>
+
+            <TextView
+                android:id="@+id/tv_subtitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="系统级 ADB 管理"
+                android:textSize="12sp"
+                android:textColor="#888888"/>
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tv_uid"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="UID: 1000"
+            android:textSize="12sp"
+            android:textColor="#4CAF50"/>
+    </LinearLayout>
+
+    <Button
+        android:id="@+id/btn_toggle_adb"
+        android:layout_width="match_parent"
+        android:layout_height="42dp"
+        android:text="开启"
+        android:textSize="16sp"
+        android:textColor="#FFFFFF"
+        android:background="@drawable/btn_rounded"
+        android:backgroundTint="#27AE60"/>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="8dp">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:background="#2D2D2D"
+            android:padding="12dp"
+            android:layout_marginRight="6dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="无线 ADB"
+                android:textSize="16sp"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"/>
+
+            <TextView
+                android:id="@+id/tv_wireless_status"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="状态: 未开启"
+                android:textSize="13sp"
+                android:textColor="#888888"
+                android:layout_marginTop="4dp"/>
+
+            <TextView
+                android:id="@+id/tv_ip_port"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="IP: 等待获取..."
+                android:textSize="18sp"
+                android:textColor="#888888"
+                android:textStyle="bold"
+                android:layout_marginTop="4dp"/>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="8dp">
+
+                <Button
+                    android:id="@+id/btn_wireless_enable"
+                    android:layout_width="0dp"
+                    android:layout_height="42dp"
+                    android:layout_weight="1"
+                    android:text="开启"
+                    android:textSize="14sp"
+                    android:background="@drawable/btn_rounded"
+                    android:backgroundTint="#27AE60"
+                    android:textColor="#FFFFFF"
+                    android:layout_marginRight="4dp"/>
+
+                <Button
+                    android:id="@+id/btn_wireless_disable"
+                    android:layout_width="0dp"
+                    android:layout_height="42dp"
+                    android:layout_weight="1"
+                    android:text="关闭"
+                    android:textSize="14sp"
+                    android:background="@drawable/btn_rounded"
+                    android:backgroundTint="#E74C3C"
+                    android:textColor="#FFFFFF"/>
+            </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:background="#2D2D2D"
+            android:padding="12dp"
+            android:layout_marginLeft="6dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="配对码"
+                android:textSize="16sp"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"/>
+
+            <TextView
+                android:id="@+id/tv_pair_code"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="点击生成"
+                android:textSize="18sp"
+                android:textColor="#4CAF50"
+                android:textStyle="bold"
+                android:layout_marginTop="4dp"/>
+
+            <TextView
+                android:id="@+id/tv_pair_port"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="配对端口: -"
+                android:textSize="13sp"
+                android:textColor="#888888"
+                android:layout_marginTop="4dp"/>
+
+            <Button
+                android:id="@+id/btn_gen_pair"
+                android:layout_width="match_parent"
+                android:layout_height="42dp"
+                android:text="生成配对码"
+                android:textSize="14sp"
+                android:background="@drawable/btn_rounded"
+                android:backgroundTint="#424242"
+                android:textColor="#FFFFFF"
+                android:layout_marginTop="8dp"/>
+        </LinearLayout>
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="#2D2D2D"
+        android:padding="12dp"
+        android:layout_marginTop="8dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="移动数据"
+            android:textSize="16sp"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold"/>
+
+        <TextView
+            android:id="@+id/tv_mobile_status"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="状态: 检测中..."
+            android:textSize="13sp"
+            android:textColor="#888888"
+            android:layout_marginTop="4dp"/>
+
+        <Button
+            android:id="@+id/btn_mobile_data"
+            android:layout_width="match_parent"
+            android:layout_height="42dp"
+            android:text="开启"
+            android:textSize="14sp"
+            android:background="@drawable/btn_rounded"
+            android:backgroundTint="#27AE60"
+            android:textColor="#FFFFFF"
+            android:layout_marginTop="6dp"/>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="绿=开启 红=关闭"
+            android:textSize="11sp"
+            android:textColor="#888888"
+            android:layout_marginTop="4dp"/>
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="#2D2D2D"
+        android:padding="12dp"
+        android:layout_marginTop="8dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="USB供电控制"
+            android:textSize="16sp"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold"/>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="8dp">
+
+            <Button
+                android:id="@+id/btn_usb2_power"
+                android:layout_width="0dp"
+                android:layout_height="42dp"
+                android:layout_weight="1"
+                android:text="USB2"
+                android:textSize="13sp"
+                android:textColor="#FFFFFF"
+                android:background="@drawable/btn_rounded"
+                android:backgroundTint="#4CAF50"
+                android:layout_marginRight="3dp"/>
+
+            <Button
+                android:id="@+id/btn_usb31_power"
+                android:layout_width="0dp"
+                android:layout_height="42dp"
+                android:layout_weight="1"
+                android:text="USB3.1"
+                android:textSize="13sp"
+                android:textColor="#FFFFFF"
+                android:background="@drawable/btn_rounded"
+                android:backgroundTint="#4CAF50"
+                android:layout_marginRight="3dp"/>
+
+            <Button
+                android:id="@+id/btn_usb32_power"
+                android:layout_width="0dp"
+                android:layout_height="42dp"
+                android:layout_weight="1"
+                android:text="USB3.2"
+                android:textSize="13sp"
+                android:textColor="#FFFFFF"
+                android:background="@drawable/btn_rounded"
+                android:backgroundTint="#4CAF50"/>
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="绿=供电开启 灰=供电关闭"
+            android:textSize="11sp"
+            android:textColor="#888888"
+            android:layout_marginTop="4dp"/>
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:gravity="bottom">
+
+        <Button
+            android:id="@+id/btn_exit"
+            android:layout_width="match_parent"
+            android:layout_height="42dp"
+            android:text="退出"
+            android:textSize="15sp"
+            android:background="@drawable/btn_rounded"
+            android:backgroundTint="#424242"
+            android:textColor="#FFFFFF"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="抖音@大伦哥cdm"
+            android:textSize="11sp"
+            android:textColor="#555555"
+            android:gravity="center"
+            android:layout_marginTop="4dp"/>
+    </LinearLayout>
+</LinearLayout>

@@ -1,0 +1,14 @@
+# 构建产物
+/bin/
+/gen/
+/app/src/main/gen/
+
+# 签名私钥（绝对不能上传）
+/sign/
+*.pk8
+*.x509.pem
+*.keystore
+*.jks
+
+# macOS
+.DS_Store
