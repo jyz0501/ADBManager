@@ -32,12 +32,20 @@ public class AdbService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         Log.i(TAG, "========== AdbService 启动（常驻）==========");
 
+        // 默认策略：ADB 保持关闭。开机/服务拉起时不自动开启任何 ADB。
         SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
         boolean autoWireless = sp.getBoolean(KEY_AUTO_WIRELESS, false);
         if (autoWireless) {
+            // 仅当用户之前手动开启了无线 ADB，才恢复（如不需要可删除此分支）
             executor.submit(() -> {
                 Log.i(TAG, "根据保存的偏好自动开启无线 ADB");
                 setWirelessAdb(true);
+            });
+        } else {
+            // 确保 ADB 默认处于关闭状态
+            executor.submit(() -> {
+                Log.i(TAG, "默认策略：确保 ADB 处于关闭状态");
+                setWirelessAdb(false);
             });
         }
         // 被异常杀死后系统会尝试重启本服务（不重传 intent）

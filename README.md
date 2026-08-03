@@ -16,10 +16,6 @@
 ## 构建
 
 ```bash
-# 准备签名文件到 sign/ 目录：
-#   sign/platform.pk8
-#   sign/platform.x509.pem
-
 bash ./build.sh
 ```
 

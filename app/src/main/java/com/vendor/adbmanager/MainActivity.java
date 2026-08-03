@@ -97,6 +97,7 @@ public class MainActivity extends Activity {
         btnUsb32Power = findViewById(R.id.btn_usb32_power);
 
         grantAllRuntimePermissions();
+        ensureAdbDisabledOnLaunch();
         updateStatus();
         updateWirelessStatus();
         updateMobileDataStatus();
@@ -170,6 +171,21 @@ public class MainActivity extends Activity {
             Log.i(TAG, "========== 切换移动数据 ==========");
             toggleMobileData();
         });
+    }
+
+    /** 启动时确保 ADB 默认关闭：仅写设置值(ADB_ENABLED=0)，不触发底层 setprop/dwc3 切换，避免扰动 USB 模式。 */
+    private void ensureAdbDisabledOnLaunch() {
+        int adbEnabled = Settings.Global.getInt(getContentResolver(), Settings.Global.ADB_ENABLED, 0);
+        if (adbEnabled == 1) {
+            Log.i(TAG, "========== 启动默认策略：仅写 ADB_ENABLED=0（不切换底层）==========");
+            try {
+                Settings.Global.putInt(getContentResolver(), Settings.Global.ADB_ENABLED, 0);
+            } catch (Exception e) {
+                Log.e(TAG, "启动默认策略：写入 ADB_ENABLED=0 失败", e);
+            }
+        } else {
+            Log.i(TAG, "启动默认策略：ADB 已处于关闭状态，无需操作");
+        }
     }
 
     private void grantAllRuntimePermissions() {
