@@ -177,6 +177,14 @@ public class MainActivity extends Activity {
             Log.i(TAG, "========== 切换移动数据 ==========");
             toggleMobileData();
         });
+
+        // 拉起常驻 AdbService,后台监听 ADB 开关/无线 ADB 端口变化并 Toast 提示
+        try {
+            startService(new Intent(this, AdbService.class));
+            Log.i(TAG, "已启动 AdbService(状态监听)");
+        } catch (Exception e) {
+            Log.e(TAG, "启动 AdbService 失败", e);
+        }
     }
 
     /** 启动时确保 ADB 默认关闭：仅写设置值(ADB_ENABLED=0)，不触发底层 setprop/dwc3 切换，避免扰动 USB 模式。 */
