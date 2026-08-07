@@ -19,6 +19,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.InputStreamReader;
 import java.net.NetworkInterface;
 import java.util.Enumeration;
@@ -44,6 +45,7 @@ public class MainActivity extends Activity {
     private TextView tvPairCode;
     private TextView tvPairPort;
     private Button btnGenPair;
+    private Button btnInstallApk;
 
     private Button btnMobileData;
     private TextView tvMobileStatus;
@@ -63,13 +65,11 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // 保留状态栏显示,窗口尺寸交由系统按 MATCH_PARENT 处理
+        // 配合根布局 fitsSystemWindows=true,让内容自动避让状态栏,
+        // 避免硬编码 height=1080/y=0 在不同 ROM 下导致顶部卡片被状态栏遮挡
         getWindow().getDecorView().setSystemUiVisibility(
                 android.view.View.SYSTEM_UI_FLAG_VISIBLE);
-
-        android.view.WindowManager.LayoutParams params = getWindow().getAttributes();
-        params.height = 1080;
-        params.y = 0;
-        getWindow().setAttributes(params);
 
         setContentView(R.layout.activity_main);
 
@@ -88,6 +88,7 @@ public class MainActivity extends Activity {
         tvPairCode = findViewById(R.id.tv_pair_code);
         tvPairPort = findViewById(R.id.tv_pair_port);
         btnGenPair = findViewById(R.id.btn_gen_pair);
+        btnInstallApk = findViewById(R.id.btn_install_apk);
 
         btnMobileData = findViewById(R.id.btn_mobile_data);
         tvMobileStatus = findViewById(R.id.tv_mobile_status);
@@ -153,6 +154,11 @@ public class MainActivity extends Activity {
         btnExit.setOnClickListener(v -> {
             Log.i(TAG, "========== 点击退出 ==========");
             finish();
+        });
+
+        btnInstallApk.setOnClickListener(v -> {
+            Log.i(TAG, "========== 点击安装 APK ==========");
+            installApkFromStorage();
         });
 
         btnUsb2Power.setOnClickListener(v -> {
@@ -479,6 +485,72 @@ public class MainActivity extends Activity {
                 Toast.makeText(MainActivity.this, "移动数据" + (targetEnabled ? "已开启" : "已关闭"), Toast.LENGTH_SHORT).show();
             });
         }).start();
+    }
+
+    /** 从 /sdcard/ADBManager/ 扫描最新 APK 并静默安装(system 签名可直接 pm install) */
+    private void installApkFromStorage() {
+        btnInstallApk.setEnabled(false);
+        Toast.makeText(this, "正在扫描 /sdcard/ADBManager/ ...", Toast.LENGTH_SHORT).show();
+
+        new Thread(() -> {
+            File dir = new File("/sdcard/ADBManager/");
+            File[] apks = dir.listFiles((d, name) -> name.toLowerCase().endsWith(".apk"));
+
+            if (apks == null || apks.length == 0) {
+                Log.w(TAG, "未找到 APK,/sdcard/ADBManager/ 为空或不存在");
+                runOnUiThread(() -> {
+                    Toast.makeText(MainActivity.this,
+                            "未找到 APK,请将更新包放到 /sdcard/ADBManager/",
+                            Toast.LENGTH_LONG).show();
+                    btnInstallApk.setEnabled(true);
+                });
+                return;
+            }
+
+            // 选最新修改时间的 APK
+            File latest = apks[0];
+            for (File f : apks) {
+                if (f.lastModified() > latest.lastModified()) {
+                    latest = f;
+                }
+            }
+            Log.i(TAG, "准备静默安装: " + latest.getAbsolutePath()
+                    + " size=" + latest.length() + " modified=" + new java.util.Date(latest.lastModified()));
+
+            final String apkPath = latest.getAbsolutePath();
+            final String apkName = latest.getName();
+            boolean success = silentInstallApk(apkPath);
+
+            runOnUiThread(() -> {
+                Toast.makeText(MainActivity.this,
+                        success ? "安装成功: " + apkName : "安装失败,请查看日志",
+                        Toast.LENGTH_LONG).show();
+                btnInstallApk.setEnabled(true);
+            });
+        }).start();
+    }
+
+    /** 执行 pm install -r,system uid 下为静默安装,无弹窗 */
+    private boolean silentInstallApk(String apkPath) {
+        try {
+            ProcessBuilder pb = new ProcessBuilder("pm", "install", "-r", apkPath);
+            pb.redirectErrorStream(true);
+            java.lang.Process p = pb.start();
+            BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = br.readLine()) != null) {
+                sb.append(line).append("\n");
+                Log.i(TAG, "pm install: " + line);
+            }
+            int code = p.waitFor();
+            String output = sb.toString();
+            Log.i(TAG, "pm install exit=" + code + " output=" + output);
+            return code == 0 && output.contains("Success");
+        } catch (Exception e) {
+            Log.e(TAG, "pm install 执行失败: " + e.getMessage(), e);
+            return false;
+        }
     }
 
     private void toggleUsbPower(String powerFile, Button btn) {

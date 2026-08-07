@@ -4,6 +4,7 @@
     android:layout_height="match_parent"
     android:background="#1A1A1A"
     android:orientation="vertical"
+    android:fitsSystemWindows="true"
     android:paddingStart="24dp"
     android:paddingEnd="24dp"
     android:paddingTop="16dp"
@@ -337,6 +338,17 @@
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
                 android:layout_weight="1"/>
+
+            <Button
+                android:id="@+id/btn_install_apk"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:text="安装 APK"
+                android:textSize="18sp"
+                android:background="@drawable/btn_rounded"
+                android:backgroundTint="#1976D2"
+                android:textColor="#FFFFFF"
+                android:layout_marginBottom="8dp"/>
 
             <Button
                 android:id="@+id/btn_exit"
