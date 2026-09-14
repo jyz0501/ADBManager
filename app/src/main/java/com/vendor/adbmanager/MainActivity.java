@@ -15,13 +15,21 @@ import android.provider.Settings;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
+import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import org.json.JSONException;
+import org.json.JSONObject;
+
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
 import java.net.NetworkInterface;
+import java.net.URL;
 import java.util.Enumeration;
 import java.util.Random;
 
@@ -30,29 +38,36 @@ public class MainActivity extends Activity {
     private static final String TAG = "AdbManager";
     private static final int WIRELESS_PORT = 5555;
 
+    
+    private static final String UPDATE_BASE_URL = "http://YOUR-UPDATE-SERVER/ADBManager/";
+    private static final String UPDATE_VERSION_FILE = "version.json";
+
     private TextView tvStatus;
     private TextView tvSubtitle;
     private TextView tvUid;
-    private Button btnToggleAdb;
+    private Switch swAdb;
+    private TextView tvUsbConnStatus;
     private Button btnExit;
     private View statusIndicator;
 
     private TextView tvWirelessStatus;
     private TextView tvIpPort;
-    private Button btnWirelessEnable;
-    private Button btnWirelessDisable;
+    private Switch swWireless;
+    private TextView tvWifiClients;
+
+    private TextView tvWifiDebugStatus;
+    private Switch swWifiDebug;
 
     private TextView tvPairCode;
     private TextView tvPairPort;
     private Button btnGenPair;
-    private Button btnInstallApk;
+    private Button btnCheckUpdate;
 
-    private Button btnMobileData;
+    private Switch swMobileData;
     private TextView tvMobileStatus;
 
-        private Button btnUsb2Power;
-        private Button btnUsb31Power;
-        private Button btnUsb32Power;
+        private Switch swUsb2Power;
+        private Switch swUsb31Power;
 
         private WirelessPairingHelper pairingHelper;
 
@@ -62,12 +77,15 @@ public class MainActivity extends Activity {
         private String currentPairCode = "";
     private int currentPairPort = 0;
 
+    /** 防止程序化 setChecked 触发 OnCheckedChangeListener */
+    private boolean suppressSwitch = false;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // 保留状态栏显示,窗口尺寸交由系统按 MATCH_PARENT 处理
-        // 配合根布局 fitsSystemWindows=true,让内容自动避让状态栏,
-        // 避免硬编码 height=1080/y=0 在不同 ROM 下导致顶部卡片被状态栏遮挡
+        
+        
+        
         getWindow().getDecorView().setSystemUiVisibility(
                 android.view.View.SYSTEM_UI_FLAG_VISIBLE);
 
@@ -76,74 +94,91 @@ public class MainActivity extends Activity {
         tvStatus = findViewById(R.id.tv_status);
         tvSubtitle = findViewById(R.id.tv_subtitle);
         tvUid = findViewById(R.id.tv_uid);
-        btnToggleAdb = findViewById(R.id.btn_toggle_adb);
+        swAdb = findViewById(R.id.sw_adb);
+        tvUsbConnStatus = findViewById(R.id.tv_usb_conn_status);
         btnExit = findViewById(R.id.btn_exit);
         statusIndicator = findViewById(R.id.status_indicator);
 
         tvWirelessStatus = findViewById(R.id.tv_wireless_status);
         tvIpPort = findViewById(R.id.tv_ip_port);
-        btnWirelessEnable = findViewById(R.id.btn_wireless_enable);
-        btnWirelessDisable = findViewById(R.id.btn_wireless_disable);
+        swWireless = findViewById(R.id.sw_wireless);
+        tvWifiClients = findViewById(R.id.tv_wifi_clients);
+
+        tvWifiDebugStatus = findViewById(R.id.tv_wifi_debug_status);
+        swWifiDebug = findViewById(R.id.sw_wifi_debug);
 
         tvPairCode = findViewById(R.id.tv_pair_code);
         tvPairPort = findViewById(R.id.tv_pair_port);
         btnGenPair = findViewById(R.id.btn_gen_pair);
-        btnInstallApk = findViewById(R.id.btn_install_apk);
+        btnCheckUpdate = findViewById(R.id.btn_check_update);
 
-        btnMobileData = findViewById(R.id.btn_mobile_data);
+        swMobileData = findViewById(R.id.sw_mobile_data);
         tvMobileStatus = findViewById(R.id.tv_mobile_status);
 
-        btnUsb2Power = findViewById(R.id.btn_usb2_power);
-        btnUsb31Power = findViewById(R.id.btn_usb31_power);
-        btnUsb32Power = findViewById(R.id.btn_usb32_power);
+        swUsb2Power = findViewById(R.id.sw_usb2_power);
+        swUsb31Power = findViewById(R.id.sw_usb31_power);
 
         grantAllRuntimePermissions();
         ensureAdbDisabledOnLaunch();
+        ensureUsb2PowerDefaultOn();
         updateStatus();
         updateWirelessStatus();
+        updateWifiDebugStatus();
         updateMobileDataStatus();
         updateUsbPowerStatus();
+        updateConnectionStatus();
 
         pairingHelper = new WirelessPairingHelper(this);
 
-        btnToggleAdb.setOnClickListener(v -> {
-            int currentState = Settings.Global.getInt(getContentResolver(), Settings.Global.ADB_ENABLED, 0);
-            boolean targetEnabled = currentState == 0;
-            Log.i(TAG, "========== ADB切换: " + (targetEnabled ? "开启" : "关闭") + " ==========");
-            
-            btnToggleAdb.setEnabled(false);
-            
+        swAdb.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            if (suppressSwitch) return;
+            Log.i(TAG, "========== ADB切换: " + (isChecked ? "开启" : "关闭") + " ==========");
+
+            swAdb.setEnabled(false);
+
             new Thread(() -> {
-                setAdbEnabled(targetEnabled);
+                setAdbEnabled(isChecked);
                 try {
                     Thread.sleep(1000);
                 } catch (InterruptedException e) {}
-                
+
                 int actualState = Settings.Global.getInt(getContentResolver(), Settings.Global.ADB_ENABLED, -1);
-                boolean success = (targetEnabled && actualState == 1) || (!targetEnabled && actualState == 0);
-                
+                boolean success = (isChecked && actualState == 1) || (!isChecked && actualState == 0);
+
                 runOnUiThread(() -> {
                     updateStatus();
-                    btnToggleAdb.setEnabled(true);
+                    swAdb.setEnabled(true);
                     if (success) {
-                        Toast.makeText(MainActivity.this, "ADB" + (targetEnabled ? "已开启" : "已关闭"), Toast.LENGTH_SHORT).show();
+                        Toast.makeText(MainActivity.this, "ADB" + (isChecked ? "已开启" : "已关闭"), Toast.LENGTH_SHORT).show();
                     } else {
-                        Toast.makeText(MainActivity.this, "ADB" + (targetEnabled ? "开启失败" : "关闭失败"), Toast.LENGTH_SHORT).show();
+                        Toast.makeText(MainActivity.this, "ADB" + (isChecked ? "开启失败" : "关闭失败"), Toast.LENGTH_SHORT).show();
                     }
                 });
             }).start();
         });
 
-        btnWirelessEnable.setOnClickListener(v -> {
-            Log.i(TAG, "========== 开启无线ADB ==========");
-            setWirelessAdb(true);
-            updateWirelessStatus();
+        swWireless.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            if (suppressSwitch) return;
+            Log.i(TAG, "========== " + (isChecked ? "开启" : "关闭") + "无线ADB ==========");
+            swWireless.setEnabled(false);
+            tvWirelessStatus.setText(isChecked ? "状态: 开启中..." : "状态: 关闭中...");
+            tvWirelessStatus.setTextColor(Color.parseColor("#888888"));
+            new Thread(() -> {
+                setWirelessAdb(isChecked);
+                runOnUiThread(() -> {
+                    updateWirelessStatus();
+                    swWireless.setEnabled(true);
+                    Toast.makeText(MainActivity.this,
+                            "无线ADB" + (isChecked ? "已开启" : "已关闭"),
+                            Toast.LENGTH_SHORT).show();
+                });
+            }).start();
         });
 
-        btnWirelessDisable.setOnClickListener(v -> {
-            Log.i(TAG, "========== 关闭无线ADB ==========");
-            setWirelessAdb(false);
-            updateWirelessStatus();
+        swWifiDebug.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            if (suppressSwitch) return;
+            Log.i(TAG, "========== 切换无线调试 ==========");
+            toggleWifiDebug(isChecked);
         });
 
         btnGenPair.setOnClickListener(v -> {
@@ -156,29 +191,28 @@ public class MainActivity extends Activity {
             finish();
         });
 
-        btnInstallApk.setOnClickListener(v -> {
-            Log.i(TAG, "========== 点击安装 APK ==========");
-            installApkFromStorage();
+        btnCheckUpdate.setOnClickListener(v -> {
+            Log.i(TAG, "========== 点击检测更新 ==========");
+            checkUpdateFromServer();
         });
 
-        btnUsb2Power.setOnClickListener(v -> {
-            toggleUsbPower("usb2power", btnUsb2Power);
+        swUsb2Power.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            if (suppressSwitch) return;
+            toggleUsbPower("usb2power", swUsb2Power, "主驾USB1");
         });
 
-        btnUsb31Power.setOnClickListener(v -> {
-            toggleUsbPower("usb31power", btnUsb31Power);
+        swUsb31Power.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            if (suppressSwitch) return;
+            toggleUsbPower("usb31power", swUsb31Power, "主驾USB2");
         });
 
-        btnUsb32Power.setOnClickListener(v -> {
-            toggleUsbPower("usb32power", btnUsb32Power);
-        });
-
-        btnMobileData.setOnClickListener(v -> {
+        swMobileData.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            if (suppressSwitch) return;
             Log.i(TAG, "========== 切换移动数据 ==========");
-            toggleMobileData();
+            toggleMobileData(isChecked);
         });
 
-        // 拉起常驻 AdbService,后台监听 ADB 开关/无线 ADB 端口变化并 Toast 提示
+        
         try {
             startService(new Intent(this, AdbService.class));
             Log.i(TAG, "已启动 AdbService(状态监听)");
@@ -187,8 +221,14 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** 启动时确保 ADB 默认关闭：仅写设置值(ADB_ENABLED=0)，不触发底层 setprop/dwc3 切换，避免扰动 USB 模式。 */
+    
     private void ensureAdbDisabledOnLaunch() {
+        // 若当前有客户端正通过 adbd 连接（无线/USB），跳过默认关闭策略，避免断开正在使用的连接
+        java.util.List<String> clients = getWirelessClients();
+        if (!clients.isEmpty()) {
+            Log.i(TAG, "========== 启动默认策略：检测到活动连接(" + clients.size() + "个)，跳过关闭 ADB ==========");
+            return;
+        }
         int adbEnabled = Settings.Global.getInt(getContentResolver(), Settings.Global.ADB_ENABLED, 0);
         if (adbEnabled == 1) {
             Log.i(TAG, "========== 启动默认策略：仅写 ADB_ENABLED=0（不切换底层）==========");
@@ -223,6 +263,120 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void setSwitchChecked(Switch sw, boolean checked) {
+        if (sw.isChecked() == checked) return;
+        suppressSwitch = true;
+        sw.setChecked(checked);
+        suppressSwitch = false;
+    }
+
+    private String execReadLine(String... cmd) {
+        try {
+            java.lang.Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+            BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String line = br.readLine();
+            p.waitFor();
+            return line != null ? line.trim() : "";
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private String execReadAll(String... cmd) {
+        try {
+            java.lang.Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+            BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = br.readLine()) != null) {
+                sb.append(line).append("\n");
+            }
+            p.waitFor();
+            return sb.toString();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /** 获取 adbd 监听端口集合（TCP 5555 + TLS 动态端口） */
+    private java.util.Set<String> getAdbdPorts() {
+        java.util.Set<String> ports = new java.util.HashSet<>();
+        String tcp = execReadLine("getprop", "service.adb.tcp.port");
+        String tls = execReadLine("getprop", "service.adb.tls.port");
+        for (String p : new String[]{tcp, tls}) {
+            if (p != null && p.matches("\\d+") && !p.equals("-1") && !p.equals("0")) {
+                ports.add(p);
+            }
+        }
+        return ports;
+    }
+
+    /** 当前是否有客户端连接在 adbd 端口上（USB 之外的网络连接） */
+    private java.util.List<String> getWirelessClients() {
+        java.util.List<String> clients = new java.util.ArrayList<>();
+        java.util.Set<String> ports = getAdbdPorts();
+        if (ports.isEmpty()) return clients;
+
+        String netstat = execReadAll("netstat", "-tn");
+        for (String line : netstat.split("\n")) {
+            if (!line.contains("ESTABLISHED")) continue;
+            String[] fields = line.trim().split("\\s+");
+            if (fields.length < 5) continue;
+            String local = fields[3];
+            String peer = fields[4];
+            String localPort = local.substring(local.lastIndexOf(':') + 1);
+            if (ports.contains(localPort)) {
+                String peerIp = peer.substring(0, peer.lastIndexOf(':'));
+                // 去掉 IPv6 映射前缀，便于阅读
+                if (peerIp.startsWith("::ffff:")) {
+                    peerIp = peerIp.substring(7);
+                }
+                if (!peerIp.equals("127.0.0.1") && !clients.contains(peerIp)) {
+                    clients.add(peerIp);
+                }
+            }
+        }
+        return clients;
+    }
+
+    /** 主驾USB1（usb2power）状态 + 无线客户端检测 */
+    private void updateConnectionStatus() {
+        new Thread(() -> {
+            String usb1 = execReadLine("sh", "-c", "cat /sys/devices/platform/usbpower/usb2power");
+            java.util.List<String> clients = getWirelessClients();
+
+            final String usbText;
+            final int usbColor;
+            if (usb1.equals("1")) {
+                usbText = "主驾USB1: 供电已开启";
+                usbColor = Color.parseColor("#27AE60");
+            } else if (usb1.equals("0")) {
+                usbText = "主驾USB1: 供电已关闭";
+                usbColor = Color.parseColor("#E74C3C");
+            } else {
+                usbText = "主驾USB1: 状态未知";
+                usbColor = Color.parseColor("#888888");
+            }
+
+            final String wifiText;
+            final int wifiColor;
+            if (clients.isEmpty()) {
+                wifiText = "无线客户端: 无连接";
+                wifiColor = Color.parseColor("#888888");
+            } else {
+                wifiText = "无线客户端: " + clients.size() + " 个 (" + android.text.TextUtils.join(", ", clients) + ")";
+                wifiColor = Color.parseColor("#27AE60");
+            }
+
+            runOnUiThread(() -> {
+                tvUsbConnStatus.setText(usbText);
+                tvUsbConnStatus.setTextColor(usbColor);
+                tvWifiClients.setText(wifiText);
+                tvWifiClients.setTextColor(wifiColor);
+            });
+        }).start();
+    }
+
     private void updateStatus() {
         int adbEnabled = Settings.Global.getInt(getContentResolver(), Settings.Global.ADB_ENABLED, 0);
         Log.i(TAG, "当前ADB状态: " + (adbEnabled == 1 ? "已开启(1)" : "已关闭(0)"));
@@ -231,14 +385,12 @@ public class MainActivity extends Activity {
             tvStatus.setText("ADB: 已开启");
             tvStatus.setTextColor(Color.parseColor("#27AE60"));
             statusIndicator.setBackgroundColor(Color.parseColor("#27AE60"));
-            btnToggleAdb.setText("关闭");
-            btnToggleAdb.setBackgroundTintList(ColorStateList.valueOf(Color.parseColor("#E74C3C")));
+            setSwitchChecked(swAdb, true);
         } else {
             tvStatus.setText("ADB: 已关闭");
             tvStatus.setTextColor(Color.parseColor("#E74C3C"));
             statusIndicator.setBackgroundColor(Color.parseColor("#E74C3C"));
-            btnToggleAdb.setText("开启");
-            btnToggleAdb.setBackgroundTintList(ColorStateList.valueOf(Color.parseColor("#27AE60")));
+            setSwitchChecked(swAdb, false);
         }
     }
 
@@ -348,6 +500,47 @@ public class MainActivity extends Activity {
         return "未知";
     }
 
+    private void updateWifiDebugStatus() {
+        int wifiDebug = Settings.Global.getInt(getContentResolver(), "adb_wifi_enabled", 0);
+        Log.i(TAG, "当前无线调试状态: " + (wifiDebug == 1 ? "已开启(1)" : "已关闭(0)"));
+
+        if (wifiDebug == 1) {
+            tvWifiDebugStatus.setText("无线调试: 已开启");
+            tvWifiDebugStatus.setTextColor(Color.parseColor("#27AE60"));
+            setSwitchChecked(swWifiDebug, true);
+        } else {
+            tvWifiDebugStatus.setText("无线调试: 未开启");
+            tvWifiDebugStatus.setTextColor(Color.parseColor("#888888"));
+            setSwitchChecked(swWifiDebug, false);
+        }
+    }
+
+    private void toggleWifiDebug(boolean targetEnabled) {
+        Log.i(TAG, "切换无线调试: " + (targetEnabled ? "开启" : "关闭"));
+
+        swWifiDebug.setEnabled(false);
+
+        new Thread(() -> {
+            try {
+                Settings.Global.putInt(getContentResolver(), "adb_wifi_enabled", targetEnabled ? 1 : 0);
+                Log.i(TAG, "✅ 无线调试" + (targetEnabled ? "已开启" : "已关闭"));
+            } catch (Exception e) {
+                Log.e(TAG, "❌ 切换无线调试失败", e);
+            }
+
+            try {
+                Thread.sleep(500);
+            } catch (InterruptedException e) {}
+
+            runOnUiThread(() -> {
+                updateWifiDebugStatus();
+                swWifiDebug.setEnabled(true);
+                Toast.makeText(MainActivity.this,
+                        "无线调试" + (targetEnabled ? "已开启" : "已关闭"), Toast.LENGTH_SHORT).show();
+            });
+        }).start();
+    }
+
     private void updateWirelessStatus() {
         try {
             java.lang.Process p = new ProcessBuilder("getprop", "service.adb.tcp.port").redirectErrorStream(true).start();
@@ -363,15 +556,13 @@ public class MainActivity extends Activity {
                 tvWirelessStatus.setTextColor(Color.parseColor("#27AE60"));
                 tvIpPort.setText("IP: " + ip + ":" + port);
                 tvIpPort.setTextColor(Color.parseColor("#4CAF50"));
-                btnWirelessEnable.setEnabled(false);
-                btnWirelessDisable.setEnabled(true);
+                setSwitchChecked(swWireless, true);
             } else {
                 tvWirelessStatus.setText("状态: 未开启");
                 tvWirelessStatus.setTextColor(Color.parseColor("#888888"));
                 tvIpPort.setText("IP: -");
                 tvIpPort.setTextColor(Color.parseColor("#888888"));
-                btnWirelessEnable.setEnabled(true);
-                btnWirelessDisable.setEnabled(false);
+                setSwitchChecked(swWireless, false);
             }
         } catch (Exception e) {
             Log.e(TAG, "更新无线ADB状态失败", e);
@@ -386,9 +577,9 @@ public class MainActivity extends Activity {
             executeShellCommand("setprop", "service.adb.tcp.port", portValue);
 
             executeShellCommand("setprop", "ctl.stop", "adbd");
-            Thread.sleep(500);
+            Thread.sleep(300);
             executeShellCommand("setprop", "ctl.start", "adbd");
-            Thread.sleep(1000);
+            Thread.sleep(300);
 
             Log.i(TAG, "✅ 无线ADB " + (enabled ? "已开启" : "已关闭"));
             getSharedPreferences("adb_prefs", MODE_PRIVATE)
@@ -431,10 +622,15 @@ public class MainActivity extends Activity {
                     currentPairPort = port;
                     tvPairCode.setText(currentPairCode);
                     tvPairCode.setTextColor(Color.parseColor("#4CAF50"));
-                    tvPairPort.setText("配对端口: " + port + "   IP: " + ip);
+                    if (port > 0) {
+                        tvPairPort.setText("配对端口: " + port + "   IP: " + ip);
+                        Toast.makeText(MainActivity.this,
+                                "电脑执行: adb pair " + ip + ":" + port, Toast.LENGTH_LONG).show();
+                    } else {
+                        tvPairPort.setText("配对端口: 获取中...   IP: " + ip);
+                    }
                     btnGenPair.setEnabled(true);
-                    Toast.makeText(MainActivity.this,
-                            "电脑执行: adb pair " + ip + ":" + port, Toast.LENGTH_LONG).show();
+                    updateWifiDebugStatus();
                 });
             }
 
@@ -458,22 +654,18 @@ public class MainActivity extends Activity {
         if (mobileData == 1) {
             tvMobileStatus.setText("移动数据: 已开启");
             tvMobileStatus.setTextColor(Color.parseColor("#27AE60"));
-            btnMobileData.setText("关闭");
-            btnMobileData.setBackgroundTintList(ColorStateList.valueOf(Color.parseColor("#E74C3C")));
+            setSwitchChecked(swMobileData, true);
         } else {
             tvMobileStatus.setText("移动数据: 已关闭");
             tvMobileStatus.setTextColor(Color.parseColor("#E74C3C"));
-            btnMobileData.setText("开启");
-            btnMobileData.setBackgroundTintList(ColorStateList.valueOf(Color.parseColor("#27AE60")));
+            setSwitchChecked(swMobileData, false);
         }
     }
 
-    private void toggleMobileData() {
-        int currentState = Settings.Global.getInt(getContentResolver(), "mobile_data", 0);
-        boolean targetEnabled = currentState == 0;
+    private void toggleMobileData(boolean targetEnabled) {
         Log.i(TAG, "切换移动数据: " + (targetEnabled ? "开启" : "关闭"));
 
-        btnMobileData.setEnabled(false);
+        swMobileData.setEnabled(false);
 
         new Thread(() -> {
             try {
@@ -489,56 +681,128 @@ public class MainActivity extends Activity {
 
             runOnUiThread(() -> {
                 updateMobileDataStatus();
-                btnMobileData.setEnabled(true);
+                swMobileData.setEnabled(true);
                 Toast.makeText(MainActivity.this, "移动数据" + (targetEnabled ? "已开启" : "已关闭"), Toast.LENGTH_SHORT).show();
             });
         }).start();
     }
 
-    /** 从 /sdcard/ADBManager/ 扫描最新 APK 并静默安装(system 签名可直接 pm install) */
-    private void installApkFromStorage() {
-        btnInstallApk.setEnabled(false);
-        Toast.makeText(this, "正在扫描 /sdcard/ADBManager/ ...", Toast.LENGTH_SHORT).show();
+    
+    private void checkUpdateFromServer() {
+        Log.i(TAG, "========== 检测服务器更新 ==========");
+        btnCheckUpdate.setEnabled(false);
+        btnCheckUpdate.setText("检测中...");
+        Toast.makeText(this, "正在连接更新服务器...", Toast.LENGTH_SHORT).show();
 
         new Thread(() -> {
-            File dir = new File("/sdcard/ADBManager/");
-            File[] apks = dir.listFiles((d, name) -> name.toLowerCase().endsWith(".apk"));
-
-            if (apks == null || apks.length == 0) {
-                Log.w(TAG, "未找到 APK,/sdcard/ADBManager/ 为空或不存在");
-                runOnUiThread(() -> {
-                    Toast.makeText(MainActivity.this,
-                            "未找到 APK,请将更新包放到 /sdcard/ADBManager/",
-                            Toast.LENGTH_LONG).show();
-                    btnInstallApk.setEnabled(true);
-                });
-                return;
-            }
-
-            // 选最新修改时间的 APK
-            File latest = apks[0];
-            for (File f : apks) {
-                if (f.lastModified() > latest.lastModified()) {
-                    latest = f;
-                }
-            }
-            Log.i(TAG, "准备静默安装: " + latest.getAbsolutePath()
-                    + " size=" + latest.length() + " modified=" + new java.util.Date(latest.lastModified()));
-
-            final String apkPath = latest.getAbsolutePath();
-            final String apkName = latest.getName();
-            boolean success = silentInstallApk(apkPath);
-
+            final String result = fetchServerVersion();
             runOnUiThread(() -> {
-                Toast.makeText(MainActivity.this,
-                        success ? "安装成功: " + apkName : "安装失败,请查看日志",
-                        Toast.LENGTH_LONG).show();
-                btnInstallApk.setEnabled(true);
+                btnCheckUpdate.setEnabled(true);
+                btnCheckUpdate.setText("检测更新");
+                Toast.makeText(MainActivity.this, result, Toast.LENGTH_LONG).show();
             });
         }).start();
     }
 
-    /** 执行 pm install -r,system uid 下为静默安装,无弹窗 */
+    
+    private String fetchServerVersion() {
+        String localName = "";
+        int localCode = 0;
+        try {
+            PackageInfo p = getPackageManager().getPackageInfo(getPackageName(), 0);
+            localCode = p.versionCode;
+            localName = p.versionName;
+        } catch (Exception e) {
+            Log.w(TAG, "读取本机版本失败", e);
+        }
+
+        HttpURLConnection conn = null;
+        try {
+            URL url = new URL(UPDATE_BASE_URL + UPDATE_VERSION_FILE);
+            Log.i(TAG, "请求版本信息: " + url);
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(5000);
+            conn.setRequestMethod("GET");
+            conn.setRequestProperty("User-Agent", "ADBManager/" + localName);
+            int httpCode = conn.getResponseCode();
+            if (httpCode != HttpURLConnection.HTTP_OK) {
+                Log.w(TAG, "版本接口返回: HTTP " + httpCode);
+                return "更新服务器异常(HTTP " + httpCode + ")";
+            }
+
+            BufferedReader br = new BufferedReader(
+                    new InputStreamReader(conn.getInputStream(), "UTF-8"));
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = br.readLine()) != null) {
+                sb.append(line);
+            }
+            JSONObject json = new JSONObject(sb.toString());
+            int serverCode = json.optInt("versionCode", 0);
+            String serverName = json.optString("versionName", "");
+            String apkUrl = json.optString("url", "");
+            Log.i(TAG, "本机 v" + localName + "(" + localCode + ") | 服务器 v"
+                    + serverName + "(" + serverCode + ") url=" + apkUrl);
+
+            if (serverCode <= localCode) {
+                return "已是最新版本 (" + localName + ")";
+            }
+            if (apkUrl.isEmpty()) {
+                return "发现新版本 " + serverName + "，但服务器未提供下载地址(占位)";
+            }
+
+            URL apkFullUrl = new URL(apkUrl.contains("://") ? apkUrl : UPDATE_BASE_URL + apkUrl);
+            boolean ok = downloadAndInstall(apkFullUrl);
+            return ok ? "更新完成，已安装 v" + serverName : "更新失败：下载或安装失败，请查看日志";
+        } catch (JSONException e) {
+            Log.e(TAG, "版本信息解析失败", e);
+            return "更新服务器返回格式异常(占位)";
+        } catch (Exception e) {
+            Log.e(TAG, "检测更新失败（更新服务未部署或不可达）", e);
+            return "更新服务不可达，请检查网络或服务器配置(占位)";
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    
+    private boolean downloadAndInstall(URL apkUrl) {
+        HttpURLConnection conn = null;
+        File apkFile = new File(getCacheDir(), "update.apk");
+        try {
+            Log.i(TAG, "开始下载: " + apkUrl + " -> " + apkFile);
+            conn = (HttpURLConnection) apkUrl.openConnection();
+            conn.setConnectTimeout(10000);
+            conn.setReadTimeout(30000);
+            conn.setRequestMethod("GET");
+            int httpCode = conn.getResponseCode();
+            if (httpCode != HttpURLConnection.HTTP_OK) {
+                Log.w(TAG, "APK 下载返回 HTTP " + httpCode);
+                return false;
+            }
+            long total = conn.getContentLengthLong();
+            try (InputStream in = conn.getInputStream();
+                 FileOutputStream fos = new FileOutputStream(apkFile)) {
+                byte[] buf = new byte[8192];
+                int n;
+                long done = 0;
+                while ((n = in.read(buf)) != -1) {
+                    fos.write(buf, 0, n);
+                    done += n;
+                }
+                Log.i(TAG, "下载完成 size=" + done + " 服务器声明=" + total);
+            }
+            return silentInstallApk(apkFile.getAbsolutePath());
+        } catch (Exception e) {
+            Log.e(TAG, "下载失败: " + e.getMessage(), e);
+            return false;
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    
     private boolean silentInstallApk(String apkPath) {
         try {
             ProcessBuilder pb = new ProcessBuilder("pm", "install", "-r", apkPath);
@@ -561,17 +825,17 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void toggleUsbPower(String powerFile, Button btn) {
+    private void toggleUsbPower(String powerFile, Switch sw, String label) {
         String path = "/sys/devices/platform/usbpower/" + powerFile;
         new Thread(() -> {
             try {
                 int currentValue = readUsbPowerValue(path);
                 int targetValue = currentValue == 1 ? 0 : 1;
 
-                // 写入目标值
+                
                 int writeExit = writeUsbPower(path, targetValue);
 
-                // 实时反馈检测：等待硬件生效后读回实际状态，确认是否真正切换
+                
                 Thread.sleep(300);
                 int actual = readUsbPowerValue(path);
                 boolean applied = (actual == targetValue);
@@ -583,11 +847,10 @@ public class MainActivity extends Activity {
                 final int finalActual = actual;
                 final boolean finalApplied = applied;
                 runOnUiThread(() -> {
-                    updateUsbPowerButton(powerFile, btn);
+                    updateUsbPowerSwitch(powerFile, sw);
                     if (finalApplied) {
                         Toast.makeText(MainActivity.this,
-                                powerFile.toUpperCase().replace("POWER", "")
-                                        + (targetValue == 1 ? "供电已开启" : "供电已关闭"),
+                                label + (targetValue == 1 ? "供电已开启" : "供电已关闭"),
                                 Toast.LENGTH_SHORT).show();
                     } else {
                         String state = finalActual == 1 ? "开" : finalActual == 0 ? "关" : "读取失败";
@@ -605,22 +868,35 @@ public class MainActivity extends Activity {
     }
 
     private void updateUsbPowerStatus() {
-        updateUsbPowerButton("usb2power", btnUsb2Power);
-        updateUsbPowerButton("usb31power", btnUsb31Power);
-        updateUsbPowerButton("usb32power", btnUsb32Power);
+        updateUsbPowerSwitch("usb2power", swUsb2Power);
+        updateUsbPowerSwitch("usb31power", swUsb31Power);
     }
 
-    private void updateUsbPowerButton(String powerFile, Button btn) {
+    /** 启动时若主驾USB1供电处于关闭，则默认打开 */
+    private void ensureUsb2PowerDefaultOn() {
+        new Thread(() -> {
+            String path = "/sys/devices/platform/usbpower/usb2power";
+            int value = readUsbPowerValue(path);
+            if (value == 0) {
+                int exit = writeUsbPower(path, 1);
+                Log.i(TAG, "启动默认开启主驾USB1供电: 写入exit=" + exit);
+            } else {
+                Log.i(TAG, "启动检查主驾USB1供电: 当前=" + (value == 1 ? "已开启" : "未知"));
+            }
+            runOnUiThread(() -> new Thread(() -> updateUsbPowerStatus()).start());
+        }).start();
+    }
+
+    private void updateUsbPowerSwitch(String powerFile, Switch sw) {
         String path = "/sys/devices/platform/usbpower/" + powerFile;
         int value = readUsbPowerValue(path);
-        // 1=绿(开启)，0=深灰(关闭)，-1=橙(读取失败/节点不存在)
-        int color = value == 1 ? Color.parseColor("#4CAF50")
-                : value == -1 ? Color.parseColor("#E67E22")
-                : Color.parseColor("#424242");
-        btn.setBackgroundTintList(ColorStateList.valueOf(color));
+        runOnUiThread(() -> {
+            setSwitchChecked(sw, value == 1);
+            sw.setEnabled(value != -1);
+        });
     }
 
-    /** 读取 USB 供电节点实际值：1=开，0=关，-1=读取失败 */
+    
     private int readUsbPowerValue(String path) {
         try {
             java.lang.Process p = new ProcessBuilder("sh", "-c", "cat " + path).redirectErrorStream(true).start();
@@ -638,7 +914,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** 写入 USB 供电节点，返回进程退出码 */
+    
     private int writeUsbPower(String path, int value) {
         try {
             java.lang.Process p = new ProcessBuilder("sh", "-c", "echo " + value + " > " + path).redirectErrorStream(true).start();
@@ -649,14 +925,17 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** 实时轮询：周期性读回 USB 供电状态，反映硬件/外部变化 */
+    
     private void startUsbPolling() {
         stopUsbPolling();
         usbPollRunnable = new Runnable() {
             @Override
             public void run() {
-                updateUsbPowerStatus();
-                usbPollHandler.postDelayed(this, 2000);
+                new Thread(() -> {
+                    updateUsbPowerStatus();
+                    updateConnectionStatus();
+                    usbPollHandler.postDelayed(this, 2000);
+                }).start();
             }
         };
         usbPollHandler.postDelayed(usbPollRunnable, 2000);
@@ -673,6 +952,7 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         updateUsbPowerStatus();
+        updateWifiDebugStatus();
         startUsbPolling();
     }
 

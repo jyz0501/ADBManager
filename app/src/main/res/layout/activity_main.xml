@@ -68,7 +68,7 @@
         android:layout_weight="1"
         android:orientation="horizontal">
 
-        <!-- 左栏：USB ADB + 移动数据 -->
+        <!-- 左栏：USB ADB -->
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="match_parent"
@@ -94,62 +94,82 @@
                 android:textColor="#888888"
                 android:layout_marginTop="4dp"/>
 
-            <Button
-                android:id="@+id/btn_toggle_adb"
+            <LinearLayout
                 android:layout_width="match_parent"
-                android:layout_height="56dp"
-                android:text="开启"
-                android:textSize="20sp"
-                android:textColor="#FFFFFF"
-                android:background="@drawable/btn_rounded"
-                android:backgroundTint="#27AE60"
-                android:layout_marginTop="16dp"/>
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="24dp">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="USB 调试"
+                    android:textSize="18sp"
+                    android:textColor="#FFFFFF"/>
+
+                <Switch
+                    android:id="@+id/sw_adb"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:switchMinWidth="96dp"
+                    android:track="@drawable/switch_track"
+                    android:thumb="@drawable/switch_thumb"
+                    android:thumbTextPadding="10dp"
+                    android:showText="true"
+                    android:textOn="开"
+                    android:textOff="关"
+                    android:textSize="16sp"
+                    android:textColor="#FFFFFF"/>
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tv_usb_conn_status"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="主驾USB1: 检测中..."
+                android:textSize="15sp"
+                android:textColor="#888888"
+                android:layout_marginTop="12dp"/>
 
             <View
                 android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:background="#3D3D3D"
-                android:layout_marginTop="24dp"
-                android:layout_marginBottom="24dp"/>
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="移动数据"
-                android:textSize="22sp"
-                android:textColor="#FFFFFF"
-                android:textStyle="bold"/>
-
-            <TextView
-                android:id="@+id/tv_mobile_status"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="状态: 检测中..."
-                android:textSize="15sp"
-                android:textColor="#888888"
-                android:layout_marginTop="4dp"/>
+                android:layout_height="0dp"
+                android:layout_weight="1"/>
 
             <Button
-                android:id="@+id/btn_mobile_data"
+                android:id="@+id/btn_check_update"
                 android:layout_width="match_parent"
-                android:layout_height="56dp"
-                android:text="开启"
-                android:textSize="20sp"
+                android:layout_height="48dp"
+                android:text="检测更新"
+                android:textSize="18sp"
                 android:background="@drawable/btn_rounded"
-                android:backgroundTint="#27AE60"
+                android:backgroundTint="#1976D2"
                 android:textColor="#FFFFFF"
-                android:layout_marginTop="12dp"/>
+                android:layout_marginBottom="8dp"/>
+
+            <Button
+                android:id="@+id/btn_exit"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:text="退出"
+                android:textSize="18sp"
+                android:background="@drawable/btn_rounded"
+                android:backgroundTint="#424242"
+                android:textColor="#FFFFFF"/>
 
             <TextView
-                android:layout_width="wrap_content"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="绿=开启 红=关闭"
+                android:text="抖音@大伦哥cdm"
                 android:textSize="13sp"
-                android:textColor="#888888"
+                android:textColor="#555555"
+                android:gravity="center"
                 android:layout_marginTop="6dp"/>
         </LinearLayout>
 
-        <!-- 中栏：无线 ADB -->
+        <!-- 中栏：无线 ADB + 无线调试 + 配对 -->
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="match_parent"
@@ -185,108 +205,90 @@
                 android:textSize="24sp"
                 android:textColor="#4CAF50"
                 android:textStyle="bold"
-                android:layout_marginTop="8dp"/>
+                android:layout_marginTop="6dp"/>
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
-                android:layout_marginTop="20dp">
+                android:gravity="center_vertical"
+                android:layout_marginTop="12dp">
 
-                <Button
-                    android:id="@+id/btn_wireless_enable"
+                <TextView
                     android:layout_width="0dp"
-                    android:layout_height="56dp"
+                    android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:text="开启"
+                    android:text="TCP 5555 端口"
                     android:textSize="18sp"
-                    android:background="@drawable/btn_rounded"
-                    android:backgroundTint="#27AE60"
-                    android:textColor="#FFFFFF"
-                    android:layout_marginEnd="8dp"/>
+                    android:textColor="#FFFFFF"/>
 
-                <Button
-                    android:id="@+id/btn_wireless_disable"
+                <Switch
+                    android:id="@+id/sw_wireless"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:switchMinWidth="96dp"
+                    android:track="@drawable/switch_track"
+                    android:thumb="@drawable/switch_thumb"
+                    android:thumbTextPadding="10dp"
+                    android:showText="true"
+                    android:textOn="开"
+                    android:textOff="关"
+                    android:textSize="16sp"
+                    android:textColor="#FFFFFF"/>
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tv_wifi_clients"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="无线客户端: 检测中..."
+                android:textSize="15sp"
+                android:textColor="#888888"
+                android:layout_marginTop="12dp"/>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#3D3D3D"
+                android:layout_marginTop="16dp"
+                android:layout_marginBottom="16dp"/>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:id="@+id/tv_wifi_debug_status"
                     android:layout_width="0dp"
-                    android:layout_height="56dp"
+                    android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:text="关闭"
+                    android:text="无线调试: 未开启"
                     android:textSize="18sp"
-                    android:background="@drawable/btn_rounded"
-                    android:backgroundTint="#E74C3C"
-                    android:textColor="#FFFFFF"
-                    android:layout_marginStart="8dp"/>
+                    android:textColor="#FFFFFF"/>
+
+                <Switch
+                    android:id="@+id/sw_wifi_debug"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:switchMinWidth="96dp"
+                    android:track="@drawable/switch_track"
+                    android:thumb="@drawable/switch_thumb"
+                    android:thumbTextPadding="10dp"
+                    android:showText="true"
+                    android:textOn="开"
+                    android:textOff="关"
+                    android:textSize="16sp"
+                    android:textColor="#FFFFFF"/>
             </LinearLayout>
 
             <View
                 android:layout_width="match_parent"
                 android:layout_height="1dp"
                 android:background="#3D3D3D"
-                android:layout_marginTop="24dp"
-                android:layout_marginBottom="24dp"/>
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:layout_marginTop="0dp">
-
-                <Button
-                    android:id="@+id/btn_usb2_power"
-                    android:layout_width="0dp"
-                    android:layout_height="48dp"
-                    android:layout_weight="1"
-                    android:text="USB2"
-                    android:textSize="16sp"
-                    android:textColor="#FFFFFF"
-                    android:background="@drawable/btn_rounded"
-                    android:backgroundTint="#4CAF50"
-                    android:layout_marginEnd="6dp"/>
-
-                <Button
-                    android:id="@+id/btn_usb31_power"
-                    android:layout_width="0dp"
-                    android:layout_height="48dp"
-                    android:layout_weight="1"
-                    android:text="USB3.1"
-                    android:textSize="16sp"
-                    android:textColor="#FFFFFF"
-                    android:background="@drawable/btn_rounded"
-                    android:backgroundTint="#4CAF50"
-                    android:layout_marginStart="3dp"
-                    android:layout_marginEnd="3dp"/>
-
-                <Button
-                    android:id="@+id/btn_usb32_power"
-                    android:layout_width="0dp"
-                    android:layout_height="48dp"
-                    android:layout_weight="1"
-                    android:text="USB3.2"
-                    android:textSize="16sp"
-                    android:textColor="#FFFFFF"
-                    android:background="@drawable/btn_rounded"
-                    android:backgroundTint="#4CAF50"
-                    android:layout_marginStart="6dp"/>
-            </LinearLayout>
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="绿=供电开启 灰=供电关闭"
-                android:textSize="13sp"
-                android:textColor="#888888"
-                android:layout_marginTop="8dp"/>
-        </LinearLayout>
-
-        <!-- 右栏：配对码 -->
-        <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:orientation="vertical"
-            android:background="#2D2D2D"
-            android:padding="24dp"
-            android:layout_marginStart="12dp">
+                android:layout_marginTop="16dp"
+                android:layout_marginBottom="16dp"/>
 
             <TextView
                 android:layout_width="wrap_content"
@@ -312,7 +314,7 @@
                 android:textSize="36sp"
                 android:textColor="#4CAF50"
                 android:textStyle="bold"
-                android:layout_marginTop="16dp"/>
+                android:layout_marginTop="8dp"/>
 
             <TextView
                 android:id="@+id/tv_pair_port"
@@ -321,53 +323,169 @@
                 android:text="配对端口: -"
                 android:textSize="16sp"
                 android:textColor="#888888"
-                android:layout_marginTop="6dp"/>
+                android:layout_marginTop="4dp"/>
 
             <Button
                 android:id="@+id/btn_gen_pair"
                 android:layout_width="match_parent"
-                android:layout_height="56dp"
+                android:layout_height="48dp"
                 android:text="生成配对码"
-                android:textSize="20sp"
+                android:textSize="18sp"
                 android:background="@drawable/btn_rounded"
                 android:backgroundTint="#424242"
                 android:textColor="#FFFFFF"
-                android:layout_marginTop="24dp"/>
+                android:layout_marginTop="12dp"/>
 
             <View
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
                 android:layout_weight="1"/>
+        </LinearLayout>
 
-            <Button
-                android:id="@+id/btn_install_apk"
-                android:layout_width="match_parent"
-                android:layout_height="48dp"
-                android:text="安装 APK"
-                android:textSize="18sp"
-                android:background="@drawable/btn_rounded"
-                android:backgroundTint="#1976D2"
-                android:textColor="#FFFFFF"
-                android:layout_marginBottom="8dp"/>
-
-            <Button
-                android:id="@+id/btn_exit"
-                android:layout_width="match_parent"
-                android:layout_height="48dp"
-                android:text="退出"
-                android:textSize="18sp"
-                android:background="@drawable/btn_rounded"
-                android:backgroundTint="#424242"
-                android:textColor="#FFFFFF"/>
+        <!-- 右栏：移动数据 + USB 供电 -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:background="#2D2D2D"
+            android:padding="24dp"
+            android:layout_marginStart="12dp">
 
             <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="移动数据"
+                android:textSize="22sp"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"/>
+
+            <TextView
+                android:id="@+id/tv_mobile_status"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="状态: 检测中..."
+                android:textSize="15sp"
+                android:textColor="#888888"
+                android:layout_marginTop="4dp"/>
+
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="抖音@大伦哥cdm"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="12dp">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="数据连接"
+                    android:textSize="18sp"
+                    android:textColor="#FFFFFF"/>
+
+                <Switch
+                    android:id="@+id/sw_mobile_data"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:switchMinWidth="96dp"
+                    android:track="@drawable/switch_track"
+                    android:thumb="@drawable/switch_thumb"
+                    android:thumbTextPadding="10dp"
+                    android:showText="true"
+                    android:textOn="开"
+                    android:textOff="关"
+                    android:textSize="16sp"
+                    android:textColor="#FFFFFF"/>
+            </LinearLayout>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#3D3D3D"
+                android:layout_marginTop="24dp"
+                android:layout_marginBottom="24dp"/>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="USB 供电"
+                android:textSize="22sp"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"/>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="16dp">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="主驾USB1"
+                    android:textSize="18sp"
+                    android:textColor="#FFFFFF"/>
+
+                <Switch
+                    android:id="@+id/sw_usb2_power"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:switchMinWidth="96dp"
+                    android:track="@drawable/switch_track"
+                    android:thumb="@drawable/switch_thumb"
+                    android:thumbTextPadding="10dp"
+                    android:showText="true"
+                    android:textOn="开"
+                    android:textOff="关"
+                    android:textSize="16sp"
+                    android:textColor="#FFFFFF"/>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="12dp">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="主驾USB2"
+                    android:textSize="18sp"
+                    android:textColor="#FFFFFF"/>
+
+                <Switch
+                    android:id="@+id/sw_usb31_power"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:switchMinWidth="96dp"
+                    android:track="@drawable/switch_track"
+                    android:thumb="@drawable/switch_thumb"
+                    android:thumbTextPadding="10dp"
+                    android:showText="true"
+                    android:textOn="开"
+                    android:textOff="关"
+                    android:textSize="16sp"
+                    android:textColor="#FFFFFF"/>
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="绿=开启 灰=关闭 禁用=不可用"
                 android:textSize="13sp"
-                android:textColor="#555555"
-                android:gravity="center"
-                android:layout_marginTop="6dp"/>
+                android:textColor="#888888"
+                android:layout_marginTop="12dp"/>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"/>
         </LinearLayout>
     </LinearLayout>
 </LinearLayout>

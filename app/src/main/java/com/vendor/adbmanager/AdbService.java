@@ -17,31 +17,25 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
-/**
- * 常驻后台服务：
- *  - 开机（或被系统拉起）后，根据用户在 MainActivity 中保存的偏好自动恢复无线 ADB。
- *  - 持续轮询 USB ADB 开关 与 无线 ADB 端口,状态变化时 Toast 提示。
- *  - 返回 START_STICKY，进程被杀死后系统会尝试重启本服务；
- *    配合 AndroidManifest 的 android:persistent="true" 实现强常驻。
- */
+
 public class AdbService extends Service {
     private static final String TAG = "AdbManager.Service";
     private static final String PREFS = "adb_prefs";
     private static final String KEY_AUTO_WIRELESS = "auto_wireless_adb";
     private static final int WIRELESS_PORT = 5555;
     private static final int POLL_INTERVAL_SECONDS = 2;
-    /** 轮询启动前的延迟,等待本服务自己的 setWirelessAdb() 完成,避免误触发 Toast */
+    
     private static final int POLL_INITIAL_DELAY_SECONDS = 3;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private ScheduledExecutorService pollExecutor;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
-    // 上一次状态:-1=未初始化 0=关 1=开
+    
     private int lastUsbAdbState = -1;
-    // 上一次无线 ADB 端口,"-1"/"0"/"" 视为关闭
+    
     private String lastWirelessPort = "";
-    // 首次轮询只建立基线,不弹 Toast
+    
     private boolean baselineEstablished = false;
 
     @Override
@@ -53,27 +47,27 @@ public class AdbService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         Log.i(TAG, "========== AdbService 启动（常驻）==========");
 
-        // 默认策略：ADB 保持关闭。开机/服务拉起时不自动开启任何 ADB。
+        
         SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
         boolean autoWireless = sp.getBoolean(KEY_AUTO_WIRELESS, false);
         if (autoWireless) {
-            // 仅当用户之前手动开启了无线 ADB，才恢复（如不需要可删除此分支）
+            
             executor.submit(() -> {
                 Log.i(TAG, "根据保存的偏好自动开启无线 ADB");
                 setWirelessAdb(true);
             });
         } else {
-            // 确保 ADB 默认处于关闭状态
+            
             executor.submit(() -> {
                 Log.i(TAG, "默认策略：确保 ADB 处于关闭状态");
                 setWirelessAdb(false);
             });
         }
 
-        // 启动状态轮询(只启动一次)
+        
         startAdbStatePolling();
 
-        // 被异常杀死后系统会尝试重启本服务（不重传 intent）
+        
         return START_STICKY;
     }
 
@@ -87,9 +81,7 @@ public class AdbService extends Service {
         }
     }
 
-    /** 启动轮询:每 2 秒检查 USB ADB 开关与无线 ADB 端口,变化时 Toast 提示。
-     *  延迟 3 秒启动,首次轮询只建立基线不弹 Toast,避免开机时本服务自身的 setWirelessAdb(false)
-     *  动作被监听器误判为"用户关闭"而弹 Toast。 */
+    
     private void startAdbStatePolling() {
         if (pollExecutor != null) return;
         pollExecutor = Executors.newSingleThreadScheduledExecutor();
@@ -100,13 +92,13 @@ public class AdbService extends Service {
                 String currentPort = readProp("service.adb.tcp.port");
 
                 if (baselineEstablished) {
-                    // USB ADB 开关变化
+                    
                     if (lastUsbAdbState != currentUsb) {
                         String msg = currentUsb == 1 ? "USB ADB 已开启" : "USB ADB 已关闭";
                         Log.i(TAG, "状态变化: " + msg);
                         showToast(msg);
                     }
-                    // 无线 ADB 端口变化
+                    
                     boolean wasOn = isPortOn(lastWirelessPort);
                     boolean nowOn = isPortOn(currentPort);
                     if (wasOn != nowOn) {

@@ -1,15 +1,15 @@
-#!/bin/bash
-#
-# ADBManager 构建脚本（纯 SDK 命令行，无需 Gradle）
-# 所有路径/版本均可通过环境变量覆盖，避免硬编码。
-#
+
+
+
+
+
 set -euo pipefail
 
-# ---- 可配置项（可用环境变量覆盖） ----
+
 : "${ANDROID_HOME:=/Users/alun/Library/Android/sdk}"
 : "${BUILD_TOOLS_VERSION:=36.0.0}"
 : "${COMPILE_SDK_VERSION:=36}"
-# 若系统默认的 javac 不合适，可用 JAVAC=/path/to/javac 覆盖
+
 : "${JAVAC:=/usr/bin/javac}"
 
 ROOT="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
@@ -22,14 +22,14 @@ ANDROID_JAR="$ANDROID_HOME/platforms/android-$COMPILE_SDK_VERSION/android.jar"
 SIGN_DIR="$ROOT/sign"
 APKSIGNER="$ROOT/tools/apksigner.jar"
 
-# ---- 目录定义 ----
+
 SRC_DIR="$ROOT/app/src/main/java"
-GEN_DIR="$ROOT/app/src/main/gen"          # R.java 独立生成目录，不再污染源码树
+GEN_DIR="$ROOT/app/src/main/gen"
 RES_DIR="$ROOT/app/src/main/res"
 ASSETS_DIR="$ROOT/app/src/main/assets"
 MANIFEST="$ROOT/app/src/main/AndroidManifest.xml"
 
-# ---- 前置检查 ----
+
 for tool in "$AAPT" "$D8" "$ZIPALIGN" "$ANDROID_JAR" "$APKSIGNER" "$SIGN_DIR/platform.pk8" "$SIGN_DIR/platform.x509.pem"; do
     if [ ! -e "$tool" ]; then
         echo "错误: 缺少必要文件/工具: $tool" >&2
@@ -91,7 +91,7 @@ echo "Unsigned APK: $ROOT/bin/apk/unsigned.apk"
 echo "Aligned  APK: $ROOT/bin/apk/aligned.apk"
 echo "Signed   APK: $ROOT/bin/apk/ADBManager_signed.apk"
 
-# ---- 清理中间产物，仅保留最终签名包 ----
+
 rm -f "$ROOT/bin/apk/unsigned.apk" \
       "$ROOT/bin/apk/aligned.apk" \
       "$ROOT/bin/apk/classes.dex"
