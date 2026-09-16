@@ -2,8 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.vendor.adbmanager"
     android:sharedUserId="android.uid.system"
-    android:versionCode="21"
-    android:versionName="1.6.0">
+    android:versionCode="22"
+    android:versionName="1.6.1">
 
     <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="33" />
 
@@ -23,7 +23,7 @@
         android:allowBackup="false"
         android:persistent="true"
         android:label="@string/app_name"
-        android:icon="@drawable/ic_gear"
+        android:icon="@mipmap/ic_launcher"
         android:theme="@style/AppTheme">
         <activity android:name=".MainActivity" android:exported="true"
             android:label="@string/app_name"

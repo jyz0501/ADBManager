@@ -45,6 +45,7 @@ public class MainActivity extends Activity {
     private TextView tvStatus;
     private TextView tvSubtitle;
     private TextView tvUid;
+    private TextView tvVersion;
     private Switch swAdb;
     private TextView tvUsbConnStatus;
     private Button btnExit;
@@ -94,6 +95,7 @@ public class MainActivity extends Activity {
         tvStatus = findViewById(R.id.tv_status);
         tvSubtitle = findViewById(R.id.tv_subtitle);
         tvUid = findViewById(R.id.tv_uid);
+        tvVersion = findViewById(R.id.tv_version);
         swAdb = findViewById(R.id.sw_adb);
         tvUsbConnStatus = findViewById(R.id.tv_usb_conn_status);
         btnExit = findViewById(R.id.btn_exit);
@@ -117,6 +119,8 @@ public class MainActivity extends Activity {
 
         swUsb2Power = findViewById(R.id.sw_usb2_power);
         swUsb31Power = findViewById(R.id.sw_usb31_power);
+
+        tvVersion.setText("v" + appVersionName());
 
         grantAllRuntimePermissions();
         ensureAdbDisabledOnLaunch();
@@ -222,6 +226,17 @@ public class MainActivity extends Activity {
     }
 
     
+    /** 当前包的版本名（与 AndroidManifest 的 versionName 一致），读取失败时占位。 */
+    private String appVersionName() {
+        try {
+            PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+            return info.versionName != null ? info.versionName : "-";
+        } catch (Exception e) {
+            Log.w(TAG, "读取版本号失败", e);
+            return "-";
+        }
+    }
+
     private void ensureAdbDisabledOnLaunch() {
         // 若当前有客户端正通过 adbd 连接（无线/USB），跳过默认关闭策略，避免断开正在使用的连接
         java.util.List<String> clients = getWirelessClients();
@@ -582,8 +597,7 @@ public class MainActivity extends Activity {
             Thread.sleep(300);
 
             Log.i(TAG, "✅ 无线ADB " + (enabled ? "已开启" : "已关闭"));
-            getSharedPreferences("adb_prefs", MODE_PRIVATE)
-                    .edit().putBoolean("auto_wireless_adb", enabled).apply();
+            // 有意不持久化：无线 ADB 每次都要用户手动开启，重启后不自动恢复
         } catch (Exception e) {
             Log.e(TAG, "❌ 设置无线ADB失败", e);
         }

@@ -2,7 +2,6 @@ package com.vendor.adbmanager;
 
 import android.app.Service;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -20,8 +19,6 @@ import java.util.concurrent.TimeUnit;
 
 public class AdbService extends Service {
     private static final String TAG = "AdbManager.Service";
-    private static final String PREFS = "adb_prefs";
-    private static final String KEY_AUTO_WIRELESS = "auto_wireless_adb";
     private static final int WIRELESS_PORT = 5555;
     private static final int POLL_INTERVAL_SECONDS = 2;
     
@@ -48,21 +45,11 @@ public class AdbService extends Service {
         Log.i(TAG, "========== AdbService 启动（常驻）==========");
 
         
-        SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
-        boolean autoWireless = sp.getBoolean(KEY_AUTO_WIRELESS, false);
-        if (autoWireless) {
-            
-            executor.submit(() -> {
-                Log.i(TAG, "根据保存的偏好自动开启无线 ADB");
-                setWirelessAdb(true);
-            });
-        } else {
-            
-            executor.submit(() -> {
-                Log.i(TAG, "默认策略：确保 ADB 处于关闭状态");
-                setWirelessAdb(false);
-            });
-        }
+        // 无线 ADB 不记忆状态：每次启动一律回到关闭，需要时由用户在界面手动开启
+        executor.submit(() -> {
+            Log.i(TAG, "默认策略：确保 ADB 处于关闭状态");
+            setWirelessAdb(false);
+        });
 
         
         startAdbStatePolling();
