@@ -55,7 +55,6 @@ public class MainActivity extends Activity {
     private TextView tvWifiClients;
 
     private TextView tvWifiDebugStatus;
-    private Switch swWifiDebug;
 
     private TextView tvPairCode;
     private TextView tvPairPort;
@@ -105,7 +104,6 @@ public class MainActivity extends Activity {
         tvWifiClients = findViewById(R.id.tv_wifi_clients);
 
         tvWifiDebugStatus = findViewById(R.id.tv_wifi_debug_status);
-        swWifiDebug = findViewById(R.id.sw_wifi_debug);
 
         tvPairCode = findViewById(R.id.tv_pair_code);
         tvPairPort = findViewById(R.id.tv_pair_port);
@@ -170,18 +168,13 @@ public class MainActivity extends Activity {
                 setWirelessAdb(isChecked);
                 runOnUiThread(() -> {
                     updateWirelessStatus();
+                    updateWifiDebugStatus();
                     swWireless.setEnabled(true);
                     Toast.makeText(MainActivity.this,
                             "无线ADB" + (isChecked ? "已开启" : "已关闭"),
                             Toast.LENGTH_SHORT).show();
                 });
             }).start();
-        });
-
-        swWifiDebug.setOnCheckedChangeListener((buttonView, isChecked) -> {
-            if (suppressSwitch) return;
-            Log.i(TAG, "========== 切换无线调试 ==========");
-            toggleWifiDebug(isChecked);
         });
 
         btnGenPair.setOnClickListener(v -> {
@@ -500,6 +493,12 @@ public class MainActivity extends Activity {
         return "未知";
     }
 
+    /**
+     * 中栏「无线调试」状态行：只读展示系统开关 adb_wifi_enabled 的实际值。
+     *
+     * 该开关与左栏「无线 ADB」操作的是同一个系统项，因此不再提供独立开关，
+     * 统一由左栏开关（AdbCtl.setWirelessAdb，含重启 adbd / 等端口 / 记录意愿）控制。
+     */
     private void updateWifiDebugStatus() {
         int wifiDebug = Settings.Global.getInt(getContentResolver(), "adb_wifi_enabled", 0);
         Log.i(TAG, "当前无线调试状态: " + (wifiDebug == 1 ? "已开启(1)" : "已关闭(0)"));
@@ -507,38 +506,10 @@ public class MainActivity extends Activity {
         if (wifiDebug == 1) {
             tvWifiDebugStatus.setText("无线调试: 已开启");
             tvWifiDebugStatus.setTextColor(Color.parseColor("#27AE60"));
-            setSwitchChecked(swWifiDebug, true);
         } else {
             tvWifiDebugStatus.setText("无线调试: 未开启");
             tvWifiDebugStatus.setTextColor(Color.parseColor("#888888"));
-            setSwitchChecked(swWifiDebug, false);
         }
-    }
-
-    private void toggleWifiDebug(boolean targetEnabled) {
-        Log.i(TAG, "切换无线调试: " + (targetEnabled ? "开启" : "关闭"));
-
-        swWifiDebug.setEnabled(false);
-
-        new Thread(() -> {
-            try {
-                Settings.Global.putInt(getContentResolver(), "adb_wifi_enabled", targetEnabled ? 1 : 0);
-                Log.i(TAG, "✅ 无线调试" + (targetEnabled ? "已开启" : "已关闭"));
-            } catch (Exception e) {
-                Log.e(TAG, "❌ 切换无线调试失败", e);
-            }
-
-            try {
-                Thread.sleep(500);
-            } catch (InterruptedException e) {}
-
-            runOnUiThread(() -> {
-                updateWifiDebugStatus();
-                swWifiDebug.setEnabled(true);
-                Toast.makeText(MainActivity.this,
-                        "无线调试" + (targetEnabled ? "已开启" : "已关闭"), Toast.LENGTH_SHORT).show();
-            });
-        }).start();
     }
 
     private void updateWirelessStatus() {

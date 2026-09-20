@@ -2,8 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.vendor.adbmanager"
     android:sharedUserId="android.uid.system"
-    android:versionCode="23"
-    android:versionName="1.6.2">
+    android:versionCode="24"
+    android:versionName="1.6.3">
 
     <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="33" />
 
