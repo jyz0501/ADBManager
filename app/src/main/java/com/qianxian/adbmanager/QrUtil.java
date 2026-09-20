@@ -1,4 +1,4 @@
-package com.vendor.adbmanager;
+package com.qianxian.adbmanager;
 
 import android.graphics.Bitmap;
 import android.graphics.Color;
@@ -17,7 +17,7 @@ public final class QrUtil {
     }
 
     /** 配对串：格式与系统无线调试二维码一致。 */
-    public static String pairingPayload(String serviceName, String code) {
+    private static String pairingPayload(String serviceName, String code) {
         String name = serviceName == null ? "" : serviceName;
         String pwd = code == null ? "" : code;
         return "WIFI:T:ADB;S:" + name + ";P:" + pwd + ";;";

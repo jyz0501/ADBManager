@@ -1,4 +1,4 @@
-package com.vendor.adbmanager;
+package com.qianxian.adbmanager;
 
 import android.app.Notification;
 import android.app.PendingIntent;
@@ -109,25 +109,8 @@ public final class AdbCtl {
         return !joined.isEmpty() && !joined.equals("1");
     }
 
-    /** 当前连在无线端口上的客户端数量（按实际监听端口统计，不再写死 5555）。 */
-    public static int wirelessClients() {
-        String port = effectivePort();
-        if (!isPortEnabled(port)) return 0;
-        List<String> out = shell("netstat", "-tn");
-        int n = 0;
-        for (String line : out) {
-            if (!line.contains("ESTABLISHED")) continue;
-            if (line.contains(":" + port + " ") || line.endsWith(":" + port)) n++;
-        }
-        return n;
-    }
-
     public static void startAdbd() {
         exec("setprop", "ctl.start", "adbd");
-    }
-
-    public static void stopAdbd() {
-        exec("setprop", "ctl.stop", "adbd");
     }
 
     /**

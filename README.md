@@ -37,7 +37,7 @@
 
 前往 [Releases](https://github.com/jyz0501/ADBManager/releases) 获取最新版本 APK（打 tag 后由 CI 自动构建发布）。
 
-> 本应用为 platform 签名的系统应用，需用目标设备 platform 私钥签名，通过 ROM 预置或 `adb install` 安装，无法上架应用商店。
+> 本应用为 platform 签名的系统应用，通过 ROM 预置或 `adb install` 安装，无法上架应用商店。
 
 ## 构建
 
@@ -45,9 +45,17 @@
 bash ./build.sh
 ```
 
-产物：`bin/apk/ADBManager_v<version>_<date>.apk`（如 `ADBManager_v1.6.2_20260921.apk`）
+产物：`bin/apk/ADBManager_v<version>_<date>.apk`（如 `ADBManager_v1.7.0_20260921.apk`）
 
-依赖：Android SDK（`ANDROID_HOME`，build-tools 36 + platform 36）、JDK 11+。无需 Gradle / Android Studio。
+依赖：Android SDK（`ANDROID_HOME`，build-tools 36 + platform 36）、JDK 11+、可联网环境。无需 Gradle / Android Studio。
+
+### 签名
+
+构建时用 **AOSP 公开的 platform 测试密钥**（`CN=Android` / `android@android.com`）签名：
+
+- 首次构建会自动从 AOSP 仓库下载并缓存到 `sign/`（该目录已在 `.gitignore` 中，不会入库）；后续构建直接复用；
+- 想换源：设置环境变量 `AOSP_KEY_BASE`（备用源 `AOSP_KEY_BASE_MIRROR`）；
+- 若目标 ROM 用的是**厂商私有 platform key**，把自己的 `platform.pk8` / `platform.x509.pem` 放进 `sign/` 即可覆盖——存在且非空时优先使用本地密钥。签名不匹配会导致 `INSTALL_FAILED_SHARED_USER_INCOMPATIBLE`。
 
 ## 安装
 
@@ -57,6 +65,7 @@ adb install -r "$(ls -t bin/apk/ADBManager_v*.apk | head -1)"
 
 ## 版本历史
 
+- **v1.7.0**（2026-09-21）：包名改为 `com.qianxian.adbmanager`（旧包名需先卸载）；构建改用 AOSP 公开 platform 测试密钥并自动下载；清理冗余资源与死代码；修复 CI 产物路径失效
 - **v1.6.3**（2026-09-21）：合并「无线 ADB」与「无线调试」两个开关（同为 `adb_wifi_enabled`），中栏只保留只读状态行
 - **v1.6.2**（2026-09-21）：移除移动数据开关；右栏改为可滚动；构建产物名带版本号与日期
 - **v1.6.1**（2026-09-15）：顶栏显示版本号（右侧小字 `v<versionName>`）

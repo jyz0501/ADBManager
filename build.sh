@@ -26,6 +26,39 @@ APKSIGNER="$ROOT/tools/apksigner.jar"
 # 不入库时会走下方存在性校验并给出明确提示，避免构建中途才失败。
 ZXING_JAR="$ROOT/tools/zxing-core.jar"
 
+# ---------- 签名密钥 ----------
+# 默认使用 AOSP 公开的 platform 测试密钥，首次构建时自动下载到 $SIGN_DIR 缓存。
+# 若目标 ROM 用的是厂商私有 platform key，把自己的 platform.pk8 / platform.x509.pem
+# 放进 $SIGN_DIR 即可覆盖（本地密钥存在且非空时优先使用）。
+PK8="$SIGN_DIR/platform.pk8"
+PEM="$SIGN_DIR/platform.x509.pem"
+AOSP_KEY_BASE="${AOSP_KEY_BASE:-https://raw.githubusercontent.com/aosp-mirror/platform_build/main/target/product/security}"
+AOSP_KEY_BASE_MIRROR="${AOSP_KEY_BASE_MIRROR:-https://raw.githubusercontent.com/aosp-mirror/platform_build/android-14.0.0_r1/target/product/security}"
+
+# 确保签名密钥就位：本地缺失时从 AOSP 仓库下载公开 platform 密钥。
+ensureSigningKeys() {
+    mkdir -p "$SIGN_DIR"
+    if [ -s "$PK8" ] && [ -s "$PEM" ]; then
+        echo "签名密钥: 使用本地已有的 platform 密钥 ($SIGN_DIR)"
+        return 0
+    fi
+    echo "未发现本地 platform 密钥，正在下载 AOSP 公开 platform 测试密钥..."
+    for base in "$AOSP_KEY_BASE" "$AOSP_KEY_BASE_MIRROR"; do
+        [ -n "$base" ] || continue
+        rm -f "$PK8" "$PEM"
+        if curl -fsSL --connect-timeout 15 "$base/platform.pk8" -o "$PK8" \
+            && curl -fsSL --connect-timeout 15 "$base/platform.x509.pem" -o "$PEM"; then
+            echo "签名密钥: 已下载 AOSP 公开 platform 密钥 -> $SIGN_DIR"
+            return 0
+        fi
+        echo "警告：从 $base 下载失败，尝试下一个源..." >&2
+    done
+    rm -f "$PK8" "$PEM"
+    echo "错误: 无法获取 platform 签名密钥(网络不可达或源已变更)。" >&2
+    echo "可手动放置 platform.pk8 / platform.x509.pem 到 $SIGN_DIR, 或用 AOSP_KEY_BASE 指定其它源。" >&2
+    exit 1
+}
+
 
 SRC_DIR="$ROOT/app/src/main/java"
 GEN_DIR="$ROOT/app/src/main/gen"
@@ -34,13 +67,15 @@ ASSETS_DIR="$ROOT/app/src/main/assets"
 MANIFEST="$ROOT/app/src/main/AndroidManifest.xml"
 
 
-for tool in "$AAPT" "$D8" "$ZIPALIGN" "$ANDROID_JAR" "$APKSIGNER" "$ZXING_JAR" "$SIGN_DIR/platform.pk8" "$SIGN_DIR/platform.x509.pem"; do
+for tool in "$AAPT" "$D8" "$ZIPALIGN" "$ANDROID_JAR" "$APKSIGNER" "$ZXING_JAR"; do
     if [ ! -e "$tool" ]; then
         echo "错误: 缺少必要文件/工具: $tool" >&2
         echo "请检查 ANDROID_HOME / BUILD_TOOLS_VERSION / COMPILE_SDK_VERSION 是否正确。" >&2
         exit 1
     fi
 done
+
+ensureSigningKeys
 
 rm -rf "$ROOT/bin" "$GEN_DIR"
 mkdir -p "$ROOT/bin/classes" "$ROOT/bin/apk" "$GEN_DIR" "$ASSETS_DIR"
@@ -63,13 +98,13 @@ echo "Step 1: 生成 R.java -> $GEN_DIR ..."
 echo "Step 2: 编译 Java（含 R.java）..."
 "$JAVAC" -d "$ROOT/bin/classes" --release 11 \
     -cp "$ANDROID_JAR:$ZXING_JAR" \
-    "$SRC_DIR"/com/vendor/adbmanager/*.java \
+    "$SRC_DIR"/com/qianxian/adbmanager/*.java \
     "$GEN_DIR"/R.java
 
 echo "Step 3: 转换为 dex..."
 cd "$ROOT/bin/apk"
 "$D8" --lib "$ANDROID_JAR" --output . \
-    "$ROOT/bin/classes/com/vendor/adbmanager"/*.class \
+    "$ROOT/bin/classes/com/qianxian/adbmanager"/*.class \
     "$ZXING_JAR"
 cd "$ROOT"
 
@@ -93,8 +128,8 @@ echo "Step 6: Zipalign（4 字节对齐）..."
 
 echo "Step 7: 用 platform 密钥签名..."
 java -jar "$APKSIGNER" sign \
-    --key "$SIGN_DIR/platform.pk8" \
-    --cert "$SIGN_DIR/platform.x509.pem" \
+    --key "$PK8" \
+    --cert "$PEM" \
     --v1-signing-enabled true \
     --v2-signing-enabled true \
     --v3-signing-enabled false \

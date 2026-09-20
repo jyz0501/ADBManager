@@ -1,4 +1,4 @@
-package com.vendor.adbmanager;
+package com.qianxian.adbmanager;
 
 import android.content.Context;
 import android.content.SharedPreferences;
@@ -53,10 +53,6 @@ public final class PairedDeviceStore {
         List<Device> all = list(ctx);
         all.removeIf(d -> d.name.equals(name));
         write(ctx, all);
-    }
-
-    public static void clear(Context ctx) {
-        write(ctx, new ArrayList<>());
     }
 
     private static void write(Context ctx, List<Device> all) {

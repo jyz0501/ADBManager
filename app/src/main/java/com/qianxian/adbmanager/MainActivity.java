@@ -1,4 +1,4 @@
-package com.vendor.adbmanager;
+package com.qianxian.adbmanager;
 
 import android.app.Activity;
 import android.content.ContentResolver;
@@ -6,9 +6,7 @@ import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
-import android.content.res.ColorStateList;
 import android.os.Bundle;
-import android.os.IBinder;
 import android.os.Process;
 import android.os.UserHandle;
 import android.provider.Settings;
@@ -31,7 +29,6 @@ import java.net.HttpURLConnection;
 import java.net.NetworkInterface;
 import java.net.URL;
 import java.util.Enumeration;
-import java.util.Random;
 
 public class MainActivity extends Activity {
 
@@ -42,8 +39,6 @@ public class MainActivity extends Activity {
     private static final String UPDATE_VERSION_FILE = "version.json";
 
     private TextView tvStatus;
-    private TextView tvSubtitle;
-    private TextView tvUid;
     private TextView tvVersion;
     private Switch swAdb;
     private Button btnExit;
@@ -74,7 +69,6 @@ public class MainActivity extends Activity {
         private Runnable usbPollRunnable;
 
         private String currentPairCode = "";
-    private int currentPairPort = 0;
 
     /** 防止程序化 setChecked 触发 OnCheckedChangeListener */
     private boolean suppressSwitch = false;
@@ -91,8 +85,6 @@ public class MainActivity extends Activity {
         setContentView(R.layout.activity_main);
 
         tvStatus = findViewById(R.id.tv_status);
-        tvSubtitle = findViewById(R.id.tv_subtitle);
-        tvUid = findViewById(R.id.tv_uid);
         tvVersion = findViewById(R.id.tv_version);
         swAdb = findViewById(R.id.sw_adb);
         btnExit = findViewById(R.id.btn_exit);
@@ -545,23 +537,6 @@ public class MainActivity extends Activity {
         AdbCtl.setWirelessAdb(this, enabled);
     }
 
-    private int executeShellCommand(String... args) {
-        try {
-            ProcessBuilder pb = new ProcessBuilder(args);
-            pb.redirectErrorStream(true);
-            java.lang.Process p = pb.start();
-            BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()));
-            String line;
-            while ((line = br.readLine()) != null) {
-                Log.d(TAG, "命令输出: " + line);
-            }
-            return p.waitFor();
-        } catch (Exception e) {
-            Log.e(TAG, "执行命令失败: " + java.util.Arrays.toString(args), e);
-            return -1;
-        }
-    }
-
     /** @param withQr true=二维码配对，false=配对码配对 */
     private void generatePairCode(boolean withQr) {
         Log.i(TAG, "========== 生成配对码（withQr=" + withQr + "）==========");
@@ -579,7 +554,6 @@ public class MainActivity extends Activity {
             public void onPairingCode(String code, int port) {
                 runOnUiThread(() -> {
                     currentPairCode = code != null ? code : "";
-                    currentPairPort = port;
                     tvPairCode.setText(currentPairCode);
                     tvPairCode.setTextColor(Color.parseColor("#4CAF50"));
                     if (qr) showPairQr(currentPairCode);

@@ -1,4 +1,4 @@
-package com.vendor.adbmanager;
+package com.qianxian.adbmanager;
 
 import android.content.BroadcastReceiver;
 import android.content.Context;
