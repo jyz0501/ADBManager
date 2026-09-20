@@ -16,7 +16,9 @@ public class BootReceiver extends BroadcastReceiver {
                 || "android.intent.action.QUICKBOOT_POWERON".equals(action)) {
             Log.i(TAG, "========== 收到开机广播，启动 AdbService ==========");
             Intent svc = new Intent(context, AdbService.class);
-            context.startService(svc);
+            // Android 8+ 起后台 startService 会被限制甚至抛 IllegalStateException，
+            // 统一用前台启动：AdbService 会在 onCreate 里立即 startForeground
+            context.startForegroundService(svc);
         }
     }
 }

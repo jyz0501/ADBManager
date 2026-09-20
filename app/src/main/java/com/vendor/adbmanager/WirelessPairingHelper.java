@@ -54,7 +54,12 @@ public class WirelessPairingHelper {
 
     public interface PairingCallback {
         void onPairingCode(String code, int port);
+
         void onError(String msg);
+
+        /** 客户端完成配对并建立连接。ip 为对端 IP，可能为 null。 */
+        default void onPaired(String ip) {
+        }
     }
 
     private final Context context;
@@ -147,6 +152,11 @@ public class WirelessPairingHelper {
                 + " pairing_code=" + code + " adb_port=" + port);
 
         boolean isPairingResult = ACTION_WIRELESS_PAIRING_RESULT.equals(action);
+
+        // 有客户端连上（status=CONNECTED）即视为本次配对成功，交给上层记录设备
+        if (!isPairingResult && status == STATUS_CONNECTED && callback != null) {
+            callback.onPaired(intent.getStringExtra("client_ip"));
+        }
 
         if (code != null && !code.isEmpty()) {
             pairingCode = code;

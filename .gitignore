@@ -2,6 +2,7 @@
 /bin/
 /gen/
 /app/src/main/gen/
+classes.dex
 
 # 签名私钥（绝对不能上传）
 /sign/

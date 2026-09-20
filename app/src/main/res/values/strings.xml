@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">ADB管理器</string>
+
+    <!-- 后台保活前台服务 -->
+    <string name="adb_channel_name">ADB 保活</string>
+    <string name="adb_channel_desc">后台维持无线 ADB 并在被系统关闭时自动重开</string>
+    <string name="adb_noti_title">ADB 管理器正在运行</string>
 </resources>

@@ -36,7 +36,6 @@ import java.util.Random;
 public class MainActivity extends Activity {
 
     private static final String TAG = "AdbManager";
-    private static final int WIRELESS_PORT = 5555;
 
     
     private static final String UPDATE_BASE_URL = "http://YOUR-UPDATE-SERVER/ADBManager/";
@@ -47,7 +46,6 @@ public class MainActivity extends Activity {
     private TextView tvUid;
     private TextView tvVersion;
     private Switch swAdb;
-    private TextView tvUsbConnStatus;
     private Button btnExit;
     private View statusIndicator;
 
@@ -62,15 +60,16 @@ public class MainActivity extends Activity {
     private TextView tvPairCode;
     private TextView tvPairPort;
     private Button btnGenPair;
+    private Button btnPairQr;
     private Button btnCheckUpdate;
+    private android.widget.ImageView ivPairQr;
+    private android.widget.LinearLayout llPairedDevices;
+    private TextView tvPairedEmpty;
 
-    private Switch swMobileData;
-    private TextView tvMobileStatus;
+    private Switch swUsb2Power;
+    private Switch swUsb31Power;
 
-        private Switch swUsb2Power;
-        private Switch swUsb31Power;
-
-        private WirelessPairingHelper pairingHelper;
+    private WirelessPairingHelper pairingHelper;
 
         private final android.os.Handler usbPollHandler = new android.os.Handler(android.os.Looper.getMainLooper());
         private Runnable usbPollRunnable;
@@ -97,7 +96,6 @@ public class MainActivity extends Activity {
         tvUid = findViewById(R.id.tv_uid);
         tvVersion = findViewById(R.id.tv_version);
         swAdb = findViewById(R.id.sw_adb);
-        tvUsbConnStatus = findViewById(R.id.tv_usb_conn_status);
         btnExit = findViewById(R.id.btn_exit);
         statusIndicator = findViewById(R.id.status_indicator);
 
@@ -112,25 +110,27 @@ public class MainActivity extends Activity {
         tvPairCode = findViewById(R.id.tv_pair_code);
         tvPairPort = findViewById(R.id.tv_pair_port);
         btnGenPair = findViewById(R.id.btn_gen_pair);
+        btnPairQr = findViewById(R.id.btn_pair_qr);
+        ivPairQr = findViewById(R.id.iv_pair_qr);
+        llPairedDevices = findViewById(R.id.ll_paired_devices);
+        tvPairedEmpty = findViewById(R.id.tv_paired_empty);
         btnCheckUpdate = findViewById(R.id.btn_check_update);
-
-        swMobileData = findViewById(R.id.sw_mobile_data);
-        tvMobileStatus = findViewById(R.id.tv_mobile_status);
 
         swUsb2Power = findViewById(R.id.sw_usb2_power);
         swUsb31Power = findViewById(R.id.sw_usb31_power);
+
+
 
         tvVersion.setText("v" + appVersionName());
 
         grantAllRuntimePermissions();
         ensureAdbDisabledOnLaunch();
-        ensureUsb2PowerDefaultOn();
         updateStatus();
         updateWirelessStatus();
         updateWifiDebugStatus();
-        updateMobileDataStatus();
         updateUsbPowerStatus();
         updateConnectionStatus();
+        ensureUsb2PowerDefaultOn();
 
         pairingHelper = new WirelessPairingHelper(this);
 
@@ -160,7 +160,6 @@ public class MainActivity extends Activity {
                 });
             }).start();
         });
-
         swWireless.setOnCheckedChangeListener((buttonView, isChecked) -> {
             if (suppressSwitch) return;
             Log.i(TAG, "========== " + (isChecked ? "开启" : "关闭") + "无线ADB ==========");
@@ -187,8 +186,15 @@ public class MainActivity extends Activity {
 
         btnGenPair.setOnClickListener(v -> {
             Log.i(TAG, "========== 生成配对码 ==========");
-            generatePairCode();
+            generatePairCode(false);
         });
+
+        btnPairQr.setOnClickListener(v -> {
+            Log.i(TAG, "========== 二维码配对 ==========");
+            generatePairCode(true);
+        });
+
+        renderPairedDevices();
 
         btnExit.setOnClickListener(v -> {
             Log.i(TAG, "========== 点击退出 ==========");
@@ -210,16 +216,11 @@ public class MainActivity extends Activity {
             toggleUsbPower("usb31power", swUsb31Power, "主驾USB2");
         });
 
-        swMobileData.setOnCheckedChangeListener((buttonView, isChecked) -> {
-            if (suppressSwitch) return;
-            Log.i(TAG, "========== 切换移动数据 ==========");
-            toggleMobileData(isChecked);
-        });
-
-        
         try {
-            startService(new Intent(this, AdbService.class));
-            Log.i(TAG, "已启动 AdbService(状态监听)");
+            // Android 12+ 起后台/前台切换受限，统一用 startForegroundService 拉保活服务
+            // Android 12+ 起后台不能裸 startService，统一走前台启动
+            startForegroundService(new Intent(this, AdbService.class));
+            Log.i(TAG, "已启动 AdbService(保活/状态监听)");
         } catch (Exception e) {
             Log.e(TAG, "启动 AdbService 失败", e);
         }
@@ -354,24 +355,10 @@ public class MainActivity extends Activity {
         return clients;
     }
 
-    /** 主驾USB1（usb2power）状态 + 无线客户端检测 */
+    /** 无线客户端检测 */
     private void updateConnectionStatus() {
         new Thread(() -> {
-            String usb1 = execReadLine("sh", "-c", "cat /sys/devices/platform/usbpower/usb2power");
             java.util.List<String> clients = getWirelessClients();
-
-            final String usbText;
-            final int usbColor;
-            if (usb1.equals("1")) {
-                usbText = "主驾USB1: 供电已开启";
-                usbColor = Color.parseColor("#27AE60");
-            } else if (usb1.equals("0")) {
-                usbText = "主驾USB1: 供电已关闭";
-                usbColor = Color.parseColor("#E74C3C");
-            } else {
-                usbText = "主驾USB1: 状态未知";
-                usbColor = Color.parseColor("#888888");
-            }
 
             final String wifiText;
             final int wifiColor;
@@ -384,8 +371,6 @@ public class MainActivity extends Activity {
             }
 
             runOnUiThread(() -> {
-                tvUsbConnStatus.setText(usbText);
-                tvUsbConnStatus.setTextColor(usbColor);
                 tvWifiClients.setText(wifiText);
                 tvWifiClients.setTextColor(wifiColor);
             });
@@ -558,11 +543,8 @@ public class MainActivity extends Activity {
 
     private void updateWirelessStatus() {
         try {
-            java.lang.Process p = new ProcessBuilder("getprop", "service.adb.tcp.port").redirectErrorStream(true).start();
-            BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()));
-            String port = br.readLine();
-            p.waitFor();
-
+            // 端口由 adbd 动态分配：优先无线调试的 TLS 端口，不再是固定 5555
+            String port = AdbCtl.effectivePort();
             Log.i(TAG, "当前无线ADB端口: " + port);
 
             if (port != null && !port.isEmpty() && !port.equals("-1") && !port.equals("0")) {
@@ -582,25 +564,14 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             Log.e(TAG, "更新无线ADB状态失败", e);
         }
+        renderPairedDevices();
     }
 
     private void setWirelessAdb(boolean enabled) {
-        try {
-            String portValue = enabled ? String.valueOf(WIRELESS_PORT) : "-1";
-            Log.i(TAG, "设置无线ADB端口: " + portValue);
-
-            executeShellCommand("setprop", "service.adb.tcp.port", portValue);
-
-            executeShellCommand("setprop", "ctl.stop", "adbd");
-            Thread.sleep(300);
-            executeShellCommand("setprop", "ctl.start", "adbd");
-            Thread.sleep(300);
-
-            Log.i(TAG, "✅ 无线ADB " + (enabled ? "已开启" : "已关闭"));
-            // 有意不持久化：无线 ADB 每次都要用户手动开启，重启后不自动恢复
-        } catch (Exception e) {
-            Log.e(TAG, "❌ 设置无线ADB失败", e);
-        }
+        // 记录用户意愿：后台 AdbService 据此在无线 ADB 被系统重置后自动重开；
+        // 用户手动关闭时意愿同步置 false，不会被服务再拉起来。
+        AdbCtl.setWirelessDesired(this, enabled);
+        AdbCtl.setWirelessAdb(this, enabled);
     }
 
     private int executeShellCommand(String... args) {
@@ -620,13 +591,17 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void generatePairCode() {
-        Log.i(TAG, "========== 生成配对码（调用系统无线调试配对服务）==========");
+    /** @param withQr true=二维码配对，false=配对码配对 */
+    private void generatePairCode(boolean withQr) {
+        Log.i(TAG, "========== 生成配对码（withQr=" + withQr + "）==========");
         btnGenPair.setEnabled(false);
+        btnPairQr.setEnabled(false);
+        ivPairQr.setVisibility(View.GONE);
         tvPairCode.setText("生成中...");
         tvPairCode.setTextColor(Color.parseColor("#888888"));
         tvPairPort.setText("配对端口: 获取中...");
         String ip = getLocalIpAddress();
+        final boolean qr = withQr;
 
         pairingHelper.startPairing(new WirelessPairingHelper.PairingCallback() {
             @Override
@@ -636,6 +611,7 @@ public class MainActivity extends Activity {
                     currentPairPort = port;
                     tvPairCode.setText(currentPairCode);
                     tvPairCode.setTextColor(Color.parseColor("#4CAF50"));
+                    if (qr) showPairQr(currentPairCode);
                     if (port > 0) {
                         tvPairPort.setText("配对端口: " + port + "   IP: " + ip);
                         Toast.makeText(MainActivity.this,
@@ -644,7 +620,24 @@ public class MainActivity extends Activity {
                         tvPairPort.setText("配对端口: 获取中...   IP: " + ip);
                     }
                     btnGenPair.setEnabled(true);
+                    btnPairQr.setEnabled(true);
                     updateWifiDebugStatus();
+                });
+            }
+
+            @Override
+            public void onPaired(String ip2) {
+                runOnUiThread(() -> {
+                    String client = ip2 != null ? ip2 : latestClientIp();
+                    if (client != null && !client.isEmpty()) {
+                        PairedDeviceStore.save(MainActivity.this, client, client);
+                    }
+                    pairingHelper.stopPairing();
+                    ivPairQr.setVisibility(View.GONE);
+                    tvPairCode.setText("已配对");
+                    tvPairCode.setTextColor(Color.parseColor("#4CAF50"));
+                    renderPairedDevices();
+                    updateWirelessStatus();
                 });
             }
 
@@ -655,50 +648,82 @@ public class MainActivity extends Activity {
                     tvPairCode.setTextColor(Color.parseColor("#E74C3C"));
                     tvPairPort.setText(msg);
                     btnGenPair.setEnabled(true);
+                    btnPairQr.setEnabled(true);
+                    ivPairQr.setVisibility(View.GONE);
                     Toast.makeText(MainActivity.this, msg, Toast.LENGTH_LONG).show();
                 });
             }
         });
     }
 
-    private void updateMobileDataStatus() {
-        int mobileData = Settings.Global.getInt(getContentResolver(), "mobile_data", 0);
-        Log.i(TAG, "当前移动数据状态: " + (mobileData == 1 ? "已开启(1)" : "已关闭(0)"));
-
-        if (mobileData == 1) {
-            tvMobileStatus.setText("移动数据: 已开启");
-            tvMobileStatus.setTextColor(Color.parseColor("#27AE60"));
-            setSwitchChecked(swMobileData, true);
-        } else {
-            tvMobileStatus.setText("移动数据: 已关闭");
-            tvMobileStatus.setTextColor(Color.parseColor("#E74C3C"));
-            setSwitchChecked(swMobileData, false);
+    /** 展示配对二维码；生成失败时隐藏并提示。 */
+    private void showPairQr(String code) {
+        android.graphics.Bitmap bmp = QrUtil.pairingQr(pairingServiceName(), code, 512);
+        if (bmp == null) {
+            ivPairQr.setVisibility(View.GONE);
+            Toast.makeText(this, "二维码生成失败，请使用配对码配对", Toast.LENGTH_SHORT).show();
+            return;
         }
+        ivPairQr.setImageBitmap(bmp);
+        ivPairQr.setVisibility(View.VISIBLE);
     }
 
-    private void toggleMobileData(boolean targetEnabled) {
-        Log.i(TAG, "切换移动数据: " + (targetEnabled ? "开启" : "关闭"));
+    /** 配对二维码里的服务名：adb-<serial>，与系统 mDNS 配对服务命名一致。 */
+    private String pairingServiceName() {
+        String serial = execReadLine("getprop", "ro.serialno");
+        if (serial == null) serial = "";
+        serial = serial.trim();
+        return serial.isEmpty() ? "adb" : "adb-" + serial;
+    }
 
-        swMobileData.setEnabled(false);
+    /** 最近一个无线客户端 IP；没有连接时返回空串。 */
+    private String latestClientIp() {
+        java.util.List<String> clients = getWirelessClients();
+        return clients.isEmpty() ? "" : clients.get(0);
+    }
 
-        new Thread(() -> {
-            try {
-                Settings.Global.putInt(getContentResolver(), "mobile_data", targetEnabled ? 1 : 0);
-                Log.i(TAG, "✅ 移动数据" + (targetEnabled ? "已开启" : "已关闭"));
-            } catch (Exception e) {
-                Log.e(TAG, "❌ 切换移动数据失败", e);
-            }
+    /** 渲染「已配对的设备」列表，在线状态以当前客户端连接为准。 */
+    private void renderPairedDevices() {
+        java.util.List<PairedDeviceStore.Device> all = PairedDeviceStore.list(this);
+        java.util.List<String> online = getWirelessClients();
+        llPairedDevices.removeAllViews();
+        tvPairedEmpty.setVisibility(all.isEmpty() ? View.VISIBLE : View.GONE);
 
-            try {
-                Thread.sleep(500);
-            } catch (InterruptedException e) {}
+        float density = getResources().getDisplayMetrics().density;
+        int pad = (int) (10 * density);
+        for (PairedDeviceStore.Device d : all) {
+            android.widget.LinearLayout row = new android.widget.LinearLayout(this);
+            row.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+            row.setPadding(0, pad, 0, pad);
 
-            runOnUiThread(() -> {
-                updateMobileDataStatus();
-                swMobileData.setEnabled(true);
-                Toast.makeText(MainActivity.this, "移动数据" + (targetEnabled ? "已开启" : "已关闭"), Toast.LENGTH_SHORT).show();
+            android.widget.TextView name = new android.widget.TextView(this);
+            name.setText(d.name);
+            name.setTextSize(16);
+            name.setTextColor(Color.parseColor("#FFFFFF"));
+            name.setLayoutParams(new android.widget.LinearLayout.LayoutParams(
+                    0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+            android.widget.TextView state = new android.widget.TextView(this);
+            boolean isOnline = online.contains(d.ip);
+            state.setText(isOnline ? "已连接" : "未连接");
+            state.setTextSize(14);
+            state.setTextColor(Color.parseColor(isOnline ? "#4CAF50" : "#888888"));
+
+            android.widget.TextView forget = new android.widget.TextView(this);
+            forget.setText("忘记");
+            forget.setTextSize(14);
+            forget.setTextColor(Color.parseColor("#1976D2"));
+            forget.setPadding((int) (14 * density), 0, 0, 0);
+            forget.setOnClickListener(v -> {
+                PairedDeviceStore.remove(MainActivity.this, d.name);
+                renderPairedDevices();
             });
-        }).start();
+
+            row.addView(name);
+            row.addView(state);
+            row.addView(forget);
+            llPairedDevices.addView(row);
+        }
     }
 
     
@@ -839,6 +864,50 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void startUsbPolling() {
+        stopUsbPolling();
+        usbPollRunnable = new Runnable() {
+            @Override
+            public void run() {
+                new Thread(() -> {
+                    updateUsbPowerStatus();
+                    updateConnectionStatus();
+                    usbPollHandler.postDelayed(this, 2000);
+                }).start();
+            }
+        };
+        usbPollHandler.postDelayed(usbPollRunnable, 2000);
+    }
+
+    private void stopUsbPolling() {
+        if (usbPollRunnable != null) {
+            usbPollHandler.removeCallbacks(usbPollRunnable);
+            usbPollRunnable = null;
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        updateWifiDebugStatus();
+        updateUsbPowerStatus();
+        startUsbPolling();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        stopUsbPolling();
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (pairingHelper != null) {
+            pairingHelper.stopPairing();
+        }
+    }
+
     private void toggleUsbPower(String powerFile, Switch sw, String label) {
         String path = "/sys/devices/platform/usbpower/" + powerFile;
         new Thread(() -> {
@@ -886,7 +955,15 @@ public class MainActivity extends Activity {
         updateUsbPowerSwitch("usb31power", swUsb31Power);
     }
 
-    /** 启动时若主驾USB1供电处于关闭，则默认打开 */
+    private void updateUsbPowerSwitch(String powerFile, Switch sw) {
+        String path = "/sys/devices/platform/usbpower/" + powerFile;
+        int value = readUsbPowerValue(path);
+        runOnUiThread(() -> {
+            setSwitchChecked(sw, value == 1);
+            sw.setEnabled(value != -1);
+        });
+    }
+
     private void ensureUsb2PowerDefaultOn() {
         new Thread(() -> {
             String path = "/sys/devices/platform/usbpower/usb2power";
@@ -901,16 +978,17 @@ public class MainActivity extends Activity {
         }).start();
     }
 
-    private void updateUsbPowerSwitch(String powerFile, Switch sw) {
-        String path = "/sys/devices/platform/usbpower/" + powerFile;
-        int value = readUsbPowerValue(path);
-        runOnUiThread(() -> {
-            setSwitchChecked(sw, value == 1);
-            sw.setEnabled(value != -1);
-        });
+    private int writeUsbPower(String path, int value) {
+        try {
+            java.lang.Process p = new ProcessBuilder("sh", "-c", "echo " + value + " > " + path).redirectErrorStream(true).start();
+            return p.waitFor();
+        } catch (Exception e) {
+            Log.e(TAG, "写入USB供电失败: " + path, e);
+            return -1;
+        }
     }
 
-    
+
     private int readUsbPowerValue(String path) {
         try {
             java.lang.Process p = new ProcessBuilder("sh", "-c", "cat " + path).redirectErrorStream(true).start();
@@ -928,59 +1006,4 @@ public class MainActivity extends Activity {
         }
     }
 
-    
-    private int writeUsbPower(String path, int value) {
-        try {
-            java.lang.Process p = new ProcessBuilder("sh", "-c", "echo " + value + " > " + path).redirectErrorStream(true).start();
-            return p.waitFor();
-        } catch (Exception e) {
-            Log.e(TAG, "写入USB供电失败: " + path, e);
-            return -1;
-        }
-    }
-
-    
-    private void startUsbPolling() {
-        stopUsbPolling();
-        usbPollRunnable = new Runnable() {
-            @Override
-            public void run() {
-                new Thread(() -> {
-                    updateUsbPowerStatus();
-                    updateConnectionStatus();
-                    usbPollHandler.postDelayed(this, 2000);
-                }).start();
-            }
-        };
-        usbPollHandler.postDelayed(usbPollRunnable, 2000);
-    }
-
-    private void stopUsbPolling() {
-        if (usbPollRunnable != null) {
-            usbPollHandler.removeCallbacks(usbPollRunnable);
-            usbPollRunnable = null;
-        }
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-        updateUsbPowerStatus();
-        updateWifiDebugStatus();
-        startUsbPolling();
-    }
-
-    @Override
-    protected void onPause() {
-        super.onPause();
-        stopUsbPolling();
-    }
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        if (pairingHelper != null) {
-            pairingHelper.stopPairing();
-        }
-    }
 }
