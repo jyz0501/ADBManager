@@ -35,6 +35,9 @@ public class MainActivity extends Activity {
     private static final String TAG = "AdbManager";
 
     
+    /** Toast 提示总开关：false = 关闭全部 Toast（仅写日志），true = 恢复提示 */
+    private static final boolean TOAST_ENABLED = false;
+
     private static final String UPDATE_BASE_URL = "http://YOUR-UPDATE-SERVER/ADBManager/";
     private static final String UPDATE_VERSION_FILE = "version.json";
 
@@ -48,8 +51,6 @@ public class MainActivity extends Activity {
     private TextView tvIpPort;
     private Switch swWireless;
     private TextView tvWifiClients;
-
-    private TextView tvWifiDebugStatus;
 
     private TextView tvPairCode;
     private TextView tvPairPort;
@@ -73,6 +74,17 @@ public class MainActivity extends Activity {
     /** 防止程序化 setChecked 触发 OnCheckedChangeListener */
     private boolean suppressSwitch = false;
 
+    /** 统一出口：关闭 Toast 时只写日志，保留原文便于排查。 */
+    private void toast(String msg) {
+        toast(msg, false);
+    }
+
+    private void toast(String msg, boolean longDuration) {
+        Log.i(TAG, "Toast: " + msg);
+        if (!TOAST_ENABLED) return;
+        Toast.makeText(this, msg, longDuration ? Toast.LENGTH_LONG : Toast.LENGTH_SHORT).show();
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -95,8 +107,6 @@ public class MainActivity extends Activity {
         swWireless = findViewById(R.id.sw_wireless);
         tvWifiClients = findViewById(R.id.tv_wifi_clients);
 
-        tvWifiDebugStatus = findViewById(R.id.tv_wifi_debug_status);
-
         tvPairCode = findViewById(R.id.tv_pair_code);
         tvPairPort = findViewById(R.id.tv_pair_port);
         btnGenPair = findViewById(R.id.btn_gen_pair);
@@ -117,7 +127,6 @@ public class MainActivity extends Activity {
         ensureAdbDisabledOnLaunch();
         updateStatus();
         updateWirelessStatus();
-        updateWifiDebugStatus();
         updateUsbPowerStatus();
         updateConnectionStatus();
         ensureUsb2PowerDefaultOn();
@@ -143,9 +152,9 @@ public class MainActivity extends Activity {
                     updateStatus();
                     swAdb.setEnabled(true);
                     if (success) {
-                        Toast.makeText(MainActivity.this, "ADB" + (isChecked ? "已开启" : "已关闭"), Toast.LENGTH_SHORT).show();
+                        toast("ADB" + (isChecked ? "已开启" : "已关闭"));
                     } else {
-                        Toast.makeText(MainActivity.this, "ADB" + (isChecked ? "开启失败" : "关闭失败"), Toast.LENGTH_SHORT).show();
+                        toast("ADB" + (isChecked ? "开启失败" : "关闭失败"));
                     }
                 });
             }).start();
@@ -160,11 +169,8 @@ public class MainActivity extends Activity {
                 setWirelessAdb(isChecked);
                 runOnUiThread(() -> {
                     updateWirelessStatus();
-                    updateWifiDebugStatus();
                     swWireless.setEnabled(true);
-                    Toast.makeText(MainActivity.this,
-                            "无线ADB" + (isChecked ? "已开启" : "已关闭"),
-                            Toast.LENGTH_SHORT).show();
+                    toast("无线ADB" + (isChecked ? "已开启" : "已关闭"));
                 });
             }).start();
         });
@@ -485,25 +491,6 @@ public class MainActivity extends Activity {
         return "未知";
     }
 
-    /**
-     * 中栏「无线调试」状态行：只读展示系统开关 adb_wifi_enabled 的实际值。
-     *
-     * 该开关与左栏「无线 ADB」操作的是同一个系统项，因此不再提供独立开关，
-     * 统一由左栏开关（AdbCtl.setWirelessAdb，含重启 adbd / 等端口 / 记录意愿）控制。
-     */
-    private void updateWifiDebugStatus() {
-        int wifiDebug = Settings.Global.getInt(getContentResolver(), "adb_wifi_enabled", 0);
-        Log.i(TAG, "当前无线调试状态: " + (wifiDebug == 1 ? "已开启(1)" : "已关闭(0)"));
-
-        if (wifiDebug == 1) {
-            tvWifiDebugStatus.setText("无线调试: 已开启");
-            tvWifiDebugStatus.setTextColor(Color.parseColor("#27AE60"));
-        } else {
-            tvWifiDebugStatus.setText("无线调试: 未开启");
-            tvWifiDebugStatus.setTextColor(Color.parseColor("#888888"));
-        }
-    }
-
     private void updateWirelessStatus() {
         try {
             // 端口由 adbd 动态分配：优先无线调试的 TLS 端口，不再是固定 5555
@@ -559,14 +546,12 @@ public class MainActivity extends Activity {
                     if (qr) showPairQr(currentPairCode);
                     if (port > 0) {
                         tvPairPort.setText("配对端口: " + port + "   IP: " + ip);
-                        Toast.makeText(MainActivity.this,
-                                "电脑执行: adb pair " + ip + ":" + port, Toast.LENGTH_LONG).show();
+                        toast("电脑执行: adb pair " + ip + ":" + port, true);
                     } else {
                         tvPairPort.setText("配对端口: 获取中...   IP: " + ip);
                     }
                     btnGenPair.setEnabled(true);
                     btnPairQr.setEnabled(true);
-                    updateWifiDebugStatus();
                 });
             }
 
@@ -595,7 +580,7 @@ public class MainActivity extends Activity {
                     btnGenPair.setEnabled(true);
                     btnPairQr.setEnabled(true);
                     ivPairQr.setVisibility(View.GONE);
-                    Toast.makeText(MainActivity.this, msg, Toast.LENGTH_LONG).show();
+                    toast(msg, true);
                 });
             }
         });
@@ -606,7 +591,7 @@ public class MainActivity extends Activity {
         android.graphics.Bitmap bmp = QrUtil.pairingQr(pairingServiceName(), code, 512);
         if (bmp == null) {
             ivPairQr.setVisibility(View.GONE);
-            Toast.makeText(this, "二维码生成失败，请使用配对码配对", Toast.LENGTH_SHORT).show();
+            toast("二维码生成失败，请使用配对码配对");
             return;
         }
         ivPairQr.setImageBitmap(bmp);
@@ -676,14 +661,14 @@ public class MainActivity extends Activity {
         Log.i(TAG, "========== 检测服务器更新 ==========");
         btnCheckUpdate.setEnabled(false);
         btnCheckUpdate.setText("检测中...");
-        Toast.makeText(this, "正在连接更新服务器...", Toast.LENGTH_SHORT).show();
+        toast("正在连接更新服务器...");
 
         new Thread(() -> {
             final String result = fetchServerVersion();
             runOnUiThread(() -> {
                 btnCheckUpdate.setEnabled(true);
                 btnCheckUpdate.setText("检测更新");
-                Toast.makeText(MainActivity.this, result, Toast.LENGTH_LONG).show();
+                toast(result, true);
             });
         }).start();
     }
@@ -834,7 +819,6 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        updateWifiDebugStatus();
         updateUsbPowerStatus();
         startUsbPolling();
     }
@@ -877,20 +861,15 @@ public class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     updateUsbPowerSwitch(powerFile, sw);
                     if (finalApplied) {
-                        Toast.makeText(MainActivity.this,
-                                label + (targetValue == 1 ? "供电已开启" : "供电已关闭"),
-                                Toast.LENGTH_SHORT).show();
+                        toast(label + (targetValue == 1 ? "供电已开启" : "供电已关闭"));
                     } else {
                         String state = finalActual == 1 ? "开" : finalActual == 0 ? "关" : "读取失败";
-                        Toast.makeText(MainActivity.this,
-                                "切换未生效（实际状态: " + state + "）",
-                                Toast.LENGTH_LONG).show();
+                        toast("切换未生效（实际状态: " + state + "）", true);
                     }
                 });
             } catch (Exception e) {
                 Log.e(TAG, "USB供电控制失败", e);
-                runOnUiThread(() -> Toast.makeText(MainActivity.this,
-                        "控制失败: " + e.getMessage(), Toast.LENGTH_SHORT).show());
+                runOnUiThread(() -> toast("控制失败: " + e.getMessage()));
             }
         }).start();
     }

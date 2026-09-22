@@ -38,6 +38,9 @@ public class AdbService extends Service {
 
     private static final String TAG = "AdbManager.Service";
 
+    /** Toast 提示总开关：false = 关闭全部 Toast（仅写日志），true = 恢复提示 */
+    private static final boolean TOAST_ENABLED = false;
+
     /** ADB 状态轮询周期。 */
     private static final int POLL_INTERVAL_SECONDS = 2;
     private static final int POLL_INITIAL_DELAY_SECONDS = 3;
@@ -211,6 +214,8 @@ public class AdbService extends Service {
     }
 
     private void showToast(String msg) {
+        Log.i(TAG, "Toast: " + msg);
+        if (!TOAST_ENABLED) return;
         mainHandler.post(() -> Toast.makeText(this, msg, Toast.LENGTH_SHORT).show());
     }
 
