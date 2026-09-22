@@ -44,6 +44,7 @@ public class MainActivity extends Activity {
     private TextView tvStatus;
     private TextView tvVersion;
     private Switch swAdb;
+    private Button btnRevokeUsbAuth;
     private Button btnExit;
     private View statusIndicator;
 
@@ -99,6 +100,7 @@ public class MainActivity extends Activity {
         tvStatus = findViewById(R.id.tv_status);
         tvVersion = findViewById(R.id.tv_version);
         swAdb = findViewById(R.id.sw_adb);
+        btnRevokeUsbAuth = findViewById(R.id.btn_revoke_usb_auth);
         btnExit = findViewById(R.id.btn_exit);
         statusIndicator = findViewById(R.id.status_indicator);
 
@@ -174,6 +176,8 @@ public class MainActivity extends Activity {
                 });
             }).start();
         });
+
+        btnRevokeUsbAuth.setOnClickListener(v -> confirmRevokeUsbAuth());
 
         btnGenPair.setOnClickListener(v -> {
             Log.i(TAG, "========== 生成配对码 ==========");
@@ -383,6 +387,33 @@ public class MainActivity extends Activity {
             statusIndicator.setBackgroundColor(Color.parseColor("#E74C3C"));
             setSwitchChecked(swAdb, false);
         }
+    }
+
+    /** 撤销 USB 调试授权前先确认：清空密钥后所有已授权的电脑都要重新确认。 */
+    private void confirmRevokeUsbAuth() {
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("撤销 USB 调试授权")
+                .setMessage("将清除所有已授权电脑的调试密钥，下次连接需重新确认。是否继续？")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("撤销", (dialog, which) -> revokeUsbAuth())
+                .show();
+    }
+
+    private void revokeUsbAuth() {
+        Log.i(TAG, "========== 撤销 USB 调试授权 ==========");
+        btnRevokeUsbAuth.setEnabled(false);
+        btnRevokeUsbAuth.setText("撤销中...");
+        new Thread(() -> {
+            final String err = AdbCtl.revokeUsbDebuggingKeys();
+            runOnUiThread(() -> showRevokeResult(err));
+        }).start();
+    }
+
+    /** Toast 已全局关闭，执行结果直接回写到按钮上，几秒后恢复原标题。 */
+    private void showRevokeResult(String err) {
+        btnRevokeUsbAuth.setEnabled(true);
+        btnRevokeUsbAuth.setText(err == null ? "已撤销 USB 调试授权" : err);
+        usbPollHandler.postDelayed(() -> btnRevokeUsbAuth.setText("撤销 USB 调试授权"), 2500);
     }
 
     private void setAdbEnabled(boolean enabled) {

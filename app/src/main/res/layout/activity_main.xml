@@ -126,6 +126,17 @@
                     android:textColor="#FFFFFF"/>
             </LinearLayout>
 
+            <Button
+                android:id="@+id/btn_revoke_usb_auth"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:text="撤销 USB 调试授权"
+                android:textSize="18sp"
+                android:background="@drawable/btn_rounded"
+                android:backgroundTint="#424242"
+                android:textColor="#FFFFFF"
+                android:layout_marginTop="12dp"/>
+
             <View
                 android:layout_width="match_parent"
                 android:layout_height="1dp"

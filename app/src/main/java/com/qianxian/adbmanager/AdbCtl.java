@@ -5,10 +5,12 @@ import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.os.IBinder;
 import android.util.Log;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -184,6 +186,41 @@ public final class AdbCtl {
                 "检测到无线ADB失效(port=%s, adbdAlive=%s)，正在自动重启无线ADB", port, adbdAlive));
         setWirelessAdb(ctx, true);
         return true;
+    }
+
+    // ---------- 授权管理 ----------
+
+    /**
+     * 撤销所有已授权的 USB 调试密钥，等价于开发者选项里的「撤销 USB 调试授权」。
+     *
+     * 走 `IAdbManager.clearDebuggingKeys()`（由 system_server 操作 adb keystore），
+     * 而不是自己删 `/data/misc/adb/adb_keys`——后者会被 SELinux 拦掉，
+     * 也不会触发系统侧的 keyStore 重新加载。<｜hy_place▁holder▁no▁813｜>
+     * 注意：这里故意不重启 adbd，
+     * 否则会掐断当前正在调试的连接；被撤销的电脑下次连接时需要重新确认授权。
+     *
+     * @return null 表示成功；否则返回失败原因
+     */
+    public static String revokeUsbDebuggingKeys() {
+        try {
+            Class<?> sm = Class.forName("android.os.ServiceManager");
+            IBinder binder = (IBinder) sm.getMethod("getService", String.class).invoke(null, "adb");
+            if (binder == null) return "无法获取 adb 系统服务";
+
+            Class<?> stub = Class.forName("android.debug.IAdbManager$Stub");
+            Object svc = stub.getMethod("asInterface", IBinder.class).invoke(null, binder);
+            if (svc == null) return "无法获取 IAdbManager";
+
+            Method clear = svc.getClass().getMethod("clearDebuggingKeys");
+            clear.invoke(svc);
+            Log.i(TAG, "已清空 USB 调试授权(adb_keys)");
+            return null;
+        } catch (NoSuchMethodException e) {
+            return "系统不支持该接口(需 Android 11+)";
+        } catch (Exception e) {
+            Log.e(TAG, "clearDebuggingKeys 失败", e);
+            return "调用失败: " + e.getMessage();
+        }
     }
 
     // ---------- 通知（前台服务用） ----------
