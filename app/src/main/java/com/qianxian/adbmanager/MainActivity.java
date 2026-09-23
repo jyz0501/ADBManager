@@ -44,6 +44,7 @@ public class MainActivity extends Activity {
     private TextView tvStatus;
     private TextView tvVersion;
     private Switch swAdb;
+    private TextView tvUsbDetail;
     private Button btnRevokeUsbAuth;
     private Button btnExit;
     private View statusIndicator;
@@ -64,6 +65,8 @@ public class MainActivity extends Activity {
 
     private Switch swUsb2Power;
     private Switch swUsb31Power;
+    private Switch swUsbRole;
+    private TextView tvUsbRoleDetail;
 
     private WirelessPairingHelper pairingHelper;
 
@@ -100,6 +103,7 @@ public class MainActivity extends Activity {
         tvStatus = findViewById(R.id.tv_status);
         tvVersion = findViewById(R.id.tv_version);
         swAdb = findViewById(R.id.sw_adb);
+        tvUsbDetail = findViewById(R.id.tv_usb_detail);
         btnRevokeUsbAuth = findViewById(R.id.btn_revoke_usb_auth);
         btnExit = findViewById(R.id.btn_exit);
         statusIndicator = findViewById(R.id.status_indicator);
@@ -120,18 +124,20 @@ public class MainActivity extends Activity {
 
         swUsb2Power = findViewById(R.id.sw_usb2_power);
         swUsb31Power = findViewById(R.id.sw_usb31_power);
+        swUsbRole = findViewById(R.id.sw_usb_role);
+        tvUsbRoleDetail = findViewById(R.id.tv_usb_role_detail);
 
 
 
         tvVersion.setText("v" + appVersionName());
 
         grantAllRuntimePermissions();
-        ensureAdbDisabledOnLaunch();
         updateStatus();
         updateWirelessStatus();
         updateUsbPowerStatus();
         updateConnectionStatus();
         ensureUsb2PowerDefaultOn();
+        updateUsbRoleStatus();
 
         pairingHelper = new WirelessPairingHelper(this);
 
@@ -142,37 +148,36 @@ public class MainActivity extends Activity {
             swAdb.setEnabled(false);
 
             new Thread(() -> {
-                setAdbEnabled(isChecked);
+                String err = setAdbEnabled(isChecked);
                 try {
                     Thread.sleep(1000);
                 } catch (InterruptedException e) {}
 
                 int actualState = Settings.Global.getInt(getContentResolver(), Settings.Global.ADB_ENABLED, -1);
                 boolean success = (isChecked && actualState == 1) || (!isChecked && actualState == 0);
+                final String detail = err;
 
                 runOnUiThread(() -> {
                     updateStatus();
                     swAdb.setEnabled(true);
-                    if (success) {
+                    if (success && detail == null) {
                         toast("ADB" + (isChecked ? "已开启" : "已关闭"));
-                    } else {
+                    } else if (!success) {
                         toast("ADB" + (isChecked ? "开启失败" : "关闭失败"));
+                    } else {
+                        toast("ADB 已切换，但底层有告警: " + detail);
                     }
                 });
             }).start();
         });
         swWireless.setOnCheckedChangeListener((buttonView, isChecked) -> {
             if (suppressSwitch) return;
-            Log.i(TAG, "========== " + (isChecked ? "开启" : "关闭") + "无线ADB ==========");
-            swWireless.setEnabled(false);
-            tvWirelessStatus.setText(isChecked ? "状态: 开启中..." : "状态: 关闭中...");
-            tvWirelessStatus.setTextColor(Color.parseColor("#888888"));
+            // 切换无线 ADB 必须重启 adbd，会掐断正在用的有线调试连接，先问一句
             new Thread(() -> {
-                setWirelessAdb(isChecked);
+                final boolean usbBusy = AdbCtl.isUsbAdbActive();
                 runOnUiThread(() -> {
-                    updateWirelessStatus();
-                    swWireless.setEnabled(true);
-                    toast("无线ADB" + (isChecked ? "已开启" : "已关闭"));
+                    if (usbBusy) confirmWirelessAdb(isChecked);
+                    else applyWirelessAdb(isChecked);
                 });
             }).start();
         });
@@ -211,6 +216,11 @@ public class MainActivity extends Activity {
             toggleUsbPower("usb31power", swUsb31Power, "主驾USB2");
         });
 
+        swUsbRole.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            if (suppressSwitch) return;
+            confirmToggleUsbRole(isChecked);
+        });
+
         try {
             // Android 12+ 起后台/前台切换受限，统一用 startForegroundService 拉保活服务
             // Android 12+ 起后台不能裸 startService，统一走前台启动
@@ -233,24 +243,14 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void ensureAdbDisabledOnLaunch() {
-        // 若当前有客户端正通过 adbd 连接（无线/USB），跳过默认关闭策略，避免断开正在使用的连接
-        java.util.List<String> clients = getWirelessClients();
-        if (!clients.isEmpty()) {
-            Log.i(TAG, "========== 启动默认策略：检测到活动连接(" + clients.size() + "个)，跳过关闭 ADB ==========");
-            return;
-        }
-        int adbEnabled = Settings.Global.getInt(getContentResolver(), Settings.Global.ADB_ENABLED, 0);
-        if (adbEnabled == 1) {
-            Log.i(TAG, "========== 启动默认策略：仅写 ADB_ENABLED=0（不切换底层）==========");
-            try {
-                Settings.Global.putInt(getContentResolver(), Settings.Global.ADB_ENABLED, 0);
-            } catch (Exception e) {
-                Log.e(TAG, "启动默认策略：写入 ADB_ENABLED=0 失败", e);
-            }
-        } else {
-            Log.i(TAG, "启动默认策略：ADB 已处于关闭状态，无需操作");
-        }
+    /**
+     * 有线 USB 调试的唯一下发出口：设置项 + 底层（composition / adbd / 必要的控制器角色）。
+     * 手动开关与冷启动默认策略都走这里，避免「设置里显示关闭、底层 adbd 还在跑」的假关闭。
+     *
+     * @return null 表示成功；否则为失败原因
+     */
+    private String applyAdbState(boolean enabled) {
+        return AdbCtl.setUsbAdb(this, enabled);
     }
 
     private void grantAllRuntimePermissions() {
@@ -387,6 +387,31 @@ public class MainActivity extends Activity {
             statusIndicator.setBackgroundColor(Color.parseColor("#E74C3C"));
             setSwitchChecked(swAdb, false);
         }
+
+        updateUsbDetail(adbEnabled == 1);
+    }
+
+    /**
+     * 底层真实状态：composition / adbd / 调试口角色。
+     * 只看 ADB_ENABLED 会出现「设置显示关、adbd 还在跑」的假关闭，这里把它显示出来。
+     */
+    private void updateUsbDetail(final boolean settingOn) {
+        new Thread(() -> {
+            String config = AdbCtl.sysUsbConfig();
+            boolean running = AdbCtl.isAdbServiceRunning();
+            UsbHw.Controller port = AdbCtl.debugPort();
+            final boolean consistent = (running == settingOn);
+            final String text = "底层: config=" + (config.isEmpty() ? "-" : config)
+                    + " | adbd=" + (running ? "在跑" : "已停")
+                    + " | 调试口=" + (port == null ? "未探测到" : port.toString());
+            Log.i(TAG, "USB 底层状态: " + text + " | 设置项=" + (settingOn ? "开" : "关")
+                    + " | 一致=" + consistent);
+            runOnUiThread(() -> {
+                if (tvUsbDetail == null) return;
+                tvUsbDetail.setText(text);
+                tvUsbDetail.setTextColor(Color.parseColor(consistent ? "#888888" : "#E67E22"));
+            });
+        }).start();
     }
 
     /** 撤销 USB 调试授权前先确认：清空密钥后所有已授权的电脑都要重新确认。 */
@@ -416,70 +441,26 @@ public class MainActivity extends Activity {
         usbPollHandler.postDelayed(() -> btnRevokeUsbAuth.setText("撤销 USB 调试授权"), 2500);
     }
 
-    private void setAdbEnabled(boolean enabled) {
+    /**
+     * 切换 USB 调试。底层动作全部交给 AdbCtl 分档处理：
+     * 默认只到 composition 档（LEVEL_CONFIG），不再把调试口切成 host，
+     * 免得同口的 CarLife/AOA 一起失效。
+     *
+     * @return null 表示成功；否则为失败原因
+     */
+    private String setAdbEnabled(boolean enabled) {
         ContentResolver resolver = getContentResolver();
         int value = enabled ? 1 : 0;
 
-        try {
-            Settings.Global.putInt(resolver, Settings.Global.ADB_ENABLED, value);
-            Log.i(TAG, "设置ADB状态: " + (enabled ? "开启" : "关闭") + "，值=" + value);
+        String err = applyAdbState(enabled);
 
-            int actual = Settings.Global.getInt(resolver, Settings.Global.ADB_ENABLED, -1);
-            Log.i(TAG, "设置后实际状态: " + actual);
-
-            if (actual != value) {
-                Log.w(TAG, "⚠️ 设置失败！期望=" + value + "，实际=" + actual);
-            } else {
-                Log.i(TAG, "✅ 设置成功！");
-            }
-
-            String usbConfig = enabled ? "adb" : "mtp";
-            Log.i(TAG, "切换USB配置: setprop sys.usb.config " + usbConfig);
-            try {
-                java.lang.Process p1 = new ProcessBuilder("setprop", "sys.usb.config", usbConfig).redirectErrorStream(true).start();
-                BufferedReader br1 = new BufferedReader(new InputStreamReader(p1.getInputStream()));
-                String line1;
-                while ((line1 = br1.readLine()) != null) {
-                    Log.i(TAG, "usb config: " + line1);
-                }
-                p1.waitFor();
-                Log.i(TAG, "USB配置已切换为: " + usbConfig);
-            } catch (Exception e) {
-                Log.e(TAG, "切换USB配置失败", e);
-            }
-
-            Thread.sleep(300);
-
-            String svcAction = enabled ? "ctl.start" : "ctl.stop";
-            Log.i(TAG, "执行服务控制: setprop " + svcAction + " adbd");
-            try {
-                java.lang.Process p2 = new ProcessBuilder("setprop", svcAction, "adbd").redirectErrorStream(true).start();
-                int code = p2.waitFor();
-                Log.i(TAG, "setprop " + svcAction + " adbd exit=" + code);
-            } catch (Exception e) {
-                Log.e(TAG, "setprop 执行失败: " + e.getMessage(), e);
-            }
-
-            Thread.sleep(500);
-
-            String dwcMode = enabled ? "peripheral" : "host";
-            Log.i(TAG, "切换dwc3控制器模式: " + dwcMode);
-            try {
-                java.lang.Process p3 = new ProcessBuilder("sh", "-c",
-                        "echo " + dwcMode + " > /sys/devices/platform/soc/a600000.ssusb/mode").redirectErrorStream(true).start();
-                BufferedReader br3 = new BufferedReader(new InputStreamReader(p3.getInputStream()));
-                String line3;
-                while ((line3 = br3.readLine()) != null) {
-                    Log.i(TAG, "dwc3 mode: " + line3);
-                }
-                int code3 = p3.waitFor();
-                Log.i(TAG, "dwc3模式切换 exit=" + code3 + " mode=" + dwcMode);
-            } catch (Exception e) {
-                Log.e(TAG, "dwc3模式切换失败", e);
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "❌ 设置ADB状态失败: " + e.getMessage(), e);
+        int actual = Settings.Global.getInt(resolver, Settings.Global.ADB_ENABLED, -1);
+        Log.i(TAG, "设置ADB状态: " + (enabled ? "开启" : "关闭") + " 期望=" + value + " 实际=" + actual);
+        if (actual != value) {
+            Log.w(TAG, "⚠️ 设置项写入失败！期望=" + value + "，实际=" + actual);
         }
+        Log.i(TAG, err == null ? "✅ 设置成功！" : "⚠️ 设置完成但有告警: " + err);
+        return err;
     }
 
     private String getLocalIpAddress() {
@@ -553,6 +534,32 @@ public class MainActivity extends Activity {
         // 用户手动关闭时意愿同步置 false，不会被服务再拉起来。
         AdbCtl.setWirelessDesired(this, enabled);
         AdbCtl.setWirelessAdb(this, enabled);
+    }
+
+    /** 有线调试正在用时的二次确认：重启 adbd 会把有线连接掐断。 */
+    private void confirmWirelessAdb(boolean enabled) {
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("切换无线 ADB")
+                .setMessage("当前有线 USB 调试正在使用中。切换无线 ADB 需要重启 adbd，"
+                        + "会断开正在用的有线调试连接。是否继续？")
+                .setNegativeButton("取消", (dialog, which) -> updateWirelessStatus())
+                .setPositiveButton("继续", (dialog, which) -> applyWirelessAdb(enabled))
+                .show();
+    }
+
+    private void applyWirelessAdb(boolean enabled) {
+        Log.i(TAG, "========== " + (enabled ? "开启" : "关闭") + "无线ADB ==========");
+        swWireless.setEnabled(false);
+        tvWirelessStatus.setText(enabled ? "状态: 开启中..." : "状态: 关闭中...");
+        tvWirelessStatus.setTextColor(Color.parseColor("#888888"));
+        new Thread(() -> {
+            setWirelessAdb(enabled);
+            runOnUiThread(() -> {
+                updateWirelessStatus();
+                swWireless.setEnabled(true);
+                toast("无线ADB" + (enabled ? "已开启" : "已关闭"));
+            });
+        }).start();
     }
 
     /** @param withQr true=二维码配对，false=配对码配对 */
@@ -833,6 +840,7 @@ public class MainActivity extends Activity {
                 new Thread(() -> {
                     updateUsbPowerStatus();
                     updateConnectionStatus();
+                    updateUsbRoleStatus();
                     usbPollHandler.postDelayed(this, 2000);
                 }).start();
             }
@@ -917,6 +925,49 @@ public class MainActivity extends Activity {
             setSwitchChecked(sw, value == 1);
             sw.setEnabled(value != -1);
         });
+    }
+
+    /**
+     * 调试口角色（peripheral ↔ host）。
+     * 这是最重的一档：切成 host 后该口不再具备 device 能力，
+     * USB 调试和同口的 CarLife/AOA 都会失效，所以独立成开关并二次确认，
+     * 不再捆绑在 USB 调试开关里。
+     */
+    private void confirmToggleUsbRole(boolean toPeripheral) {
+        String msg = toPeripheral
+                ? "把调试口切回 device(peripheral) 角色，恢复 USB 调试能力？"
+                : "把调试口切成 host 角色？\n该口将失去 device 能力，USB 调试与同口的 CarLife/AOA 都会失效。";
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("主驾USB1 角色")
+                .setMessage(msg)
+                .setNegativeButton("取消", (dialog, which) -> updateUsbRoleStatus())
+                .setPositiveButton("确定", (dialog, which) -> toggleUsbRole(toPeripheral))
+                .show();
+    }
+
+    private void toggleUsbRole(boolean toPeripheral) {
+        new Thread(() -> {
+            String err = AdbCtl.setDebugPortRole(toPeripheral);
+            Log.i(TAG, "调试口角色切换 peripheral=" + toPeripheral + " 结果=" + (err == null ? "成功" : err));
+            runOnUiThread(() -> {
+                updateUsbRoleStatus();
+                toast(err == null ? "调试口角色已切换" : err);
+            });
+        }).start();
+    }
+
+    private void updateUsbRoleStatus() {
+        new Thread(() -> {
+            UsbHw.Controller port = AdbCtl.debugPort();
+            final boolean peripheral = port != null && port.isPeripheral();
+            final String detail = port == null ? "未探测到 USB 控制器" : ("节点: " + port.modePath);
+            runOnUiThread(() -> {
+                if (swUsbRole == null) return;
+                setSwitchChecked(swUsbRole, peripheral);
+                swUsbRole.setEnabled(port != null);
+                if (tvUsbRoleDetail != null) tvUsbRoleDetail.setText(detail);
+            });
+        }).start();
     }
 
     private void ensureUsb2PowerDefaultOn() {
