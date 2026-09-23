@@ -364,15 +364,6 @@ public final class AdbCtl {
         return err;
     }
 
-    /** 只切调试口角色（peripheral ↔ host），供右栏独立开关使用。 */
-    public static String setDebugPortRole(boolean peripheral) {
-        UsbHw.Controller port = debugPort();
-        if (port == null) return "未探测到 USB 控制器";
-        String target = peripheral ? UsbHw.MODE_PERIPHERAL : UsbHw.MODE_HOST;
-        if (UsbHw.setMode(port, target)) return null;
-        return "角色切换未生效（当前 " + (port.mode.isEmpty() ? "未知" : port.mode) + "）";
-    }
-
     // ---------- 通知（前台服务用） ----------
 
     public static final String CHANNEL_ID = "adb_keepalive";

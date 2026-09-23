@@ -7,15 +7,14 @@
 | 左栏 | 中栏 | 右栏 |
 |---|---|---|
 | USB 调试开关 + 底层状态 | 配对设备 / 配对码 / 配对端口 / 二维码 | USB 供电（主驾USB1 / 主驾USB2） |
-| 无线 ADB 开关 | 已配对设备 | 主驾USB1 角色（device / host） |
-| 无线 ADB 状态（状态、IP:端口、无线客户端） | | （底部）检测更新 / 退出、作者信息 |
+| 无线 ADB 开关 | 已配对设备 | （底部）检测更新 / 退出、作者信息 |
+| 无线 ADB 状态（状态、IP:端口、无线客户端） | | |
 
 > 中栏与右栏各自独立上下滑动；三栏从上到下依次为：标题区 → 内容区（左：USB 调试 / 无线 ADB 开关；状态信息固定在左栏底部）→ 操作区。
 
 ## 功能
 
 - **USB ADB 开关**：切换系统 ADB 及 `adbd` 服务，开机时默认关闭一次。默认只切 `sys.usb.config`（`adb` ↔ `none`）与 `adbd`，**不再把调试口切成 host**；左栏实时显示底层 `config` / `adbd` / 调试口角色，设置项与底层不一致时该行变橙
-- **主驾USB1 角色（device / host）**：独立开关，带二次确认。切成 host 会让该口失去 device 能力（USB 调试与同口 CarLife/AOA 一起失效），日常无需使用
 - **无线 ADB 开关**：开启/关闭系统无线调试（端口由 adbd 动态分配并 mDNS 广播，不再固定 5555），异步执行不阻塞 UI，实时显示已连接客户端
 - **无线 ADB 后台保活**：开关的状态会被记住（仅记住「用户上次是否希望开启」）。用户手动开启后，若被系统重置（熄屏省电、`adbd` 被杀、ROM 清理属性），`AdbService` 会在 10 秒级检测到并自动重开；用户手动关闭则不会被拉起
 - **撤销 USB 调试授权**：等同开发者选项里的同名按钮，通过 `IAdbManager.clearDebuggingKeys()` 清空系统 adb keystore；点按钮会先二次确认。执行后不重启 adbd（避免掐断正在调试的连接），被撤销的电脑下次连接时需重新确认授权
@@ -45,7 +44,9 @@
 |---|---|---|
 | `LEVEL_SILENT` | 只 `ctl.stop/start adbd` | 不重枚举，电脑侧仅 offline |
 | `LEVEL_CONFIG`（默认） | + `sys.usb.config` `adb` ↔ `none` | 调试口重新枚举一次，其他口不受影响 |
-| `LEVEL_ROLE` | + 控制器角色 `peripheral` ↔ `host` | 该口失去 device 能力，同口 CarLife/AOA 失效 |
+| `LEVEL_ROLE` | + 控制器角色 `peripheral` ↔ `host` | 该口失去 device 能力，同口 CarLife/AOA 失效（预留档位，当前无 UI 入口） |
+
+另外，开启 USB 调试时若调试口正停在 `host`（这车冷上电就是 host），`applyUsbAdb` 会**自动拉回 `peripheral`**，因此不需要、也不提供手动切角色的入口。
 
 ### 设置项的写入顺序
 
@@ -107,6 +108,7 @@ adb install -r "$(ls -t bin/apk/ADBManager_v*.apk | head -1)"
 
 ## 版本历史
 
+- **v2.1.0**（2026-09-23）：移除右栏「主驾USB1 角色」开关及其 `AdbCtl.setDebugPortRole()`——开启 USB 调试时 `applyUsbAdb` 会自动把停在 host 的调试口拉回 peripheral，手动切回已无意义，而主动切 host 是破坏性操作且无日常场景；角色状态看左栏底层状态行的「调试口」即可。作为补偿，2 秒轮询改为刷新 `updateStatus()`，左栏那行保持实时
 - **v2.0.0**（2026-09-23）：USB 调试按硬件接口分档，默认不再把调试口切成 host（避免同口 CarLife/AOA 失效）；新增 `UsbHw` 动态探测控制器（不再硬编码 `a600000`）并回读校验；关闭时 `sys.usb.config` 由 `mtp` 改为 `none`；默认关闭改走与手动开关同一出口（`AdbCtl.setUsbAdb`），并**改为只在开机广播执行一次**（原先挂在 Activity 启动上，每次开界面都掐断 USB 调试）；设置项改为**最后写入**（避免 ROM 监听 `adb_enabled` 自行重算 composition 覆盖我们的写入）；左栏新增底层状态行；右栏新增「主驾USB1 角色」独立开关；切换无线 ADB 前若有线调试在用的会二次确认
 - **v1.9.0**（2026-09-23）：新增「撤销 USB 调试授权」（左栏 USB 调试区下方，走系统 `IAdbManager.clearDebuggingKeys()`，带二次确认）
 - **v1.8.0**（2026-09-23）：UI 重排（左栏：USB 调试 / 无线 ADB 开关 + 底部状态；右栏：USB 供电 + 底部检测更新/退出）；中栏精简为单纯配对功能并支持上下滑动；移除 USB 供电的状态描述文案；关闭全部 Toast 提示（`TOAST_ENABLED` 开关控制，可恢复）

@@ -65,8 +65,6 @@ public class MainActivity extends Activity {
 
     private Switch swUsb2Power;
     private Switch swUsb31Power;
-    private Switch swUsbRole;
-    private TextView tvUsbRoleDetail;
 
     private WirelessPairingHelper pairingHelper;
 
@@ -124,8 +122,6 @@ public class MainActivity extends Activity {
 
         swUsb2Power = findViewById(R.id.sw_usb2_power);
         swUsb31Power = findViewById(R.id.sw_usb31_power);
-        swUsbRole = findViewById(R.id.sw_usb_role);
-        tvUsbRoleDetail = findViewById(R.id.tv_usb_role_detail);
 
 
 
@@ -137,7 +133,6 @@ public class MainActivity extends Activity {
         updateUsbPowerStatus();
         updateConnectionStatus();
         ensureUsb2PowerDefaultOn();
-        updateUsbRoleStatus();
 
         pairingHelper = new WirelessPairingHelper(this);
 
@@ -216,10 +211,6 @@ public class MainActivity extends Activity {
             toggleUsbPower("usb31power", swUsb31Power, "主驾USB2");
         });
 
-        swUsbRole.setOnCheckedChangeListener((buttonView, isChecked) -> {
-            if (suppressSwitch) return;
-            confirmToggleUsbRole(isChecked);
-        });
 
         try {
             // Android 12+ 起后台/前台切换受限，统一用 startForegroundService 拉保活服务
@@ -840,7 +831,8 @@ public class MainActivity extends Activity {
                 new Thread(() -> {
                     updateUsbPowerStatus();
                     updateConnectionStatus();
-                    updateUsbRoleStatus();
+                    // updateStatus() 会直接改 tvStatus 等控件，必须回主线程
+                    runOnUiThread(() -> updateStatus());
                     usbPollHandler.postDelayed(this, 2000);
                 }).start();
             }
@@ -925,49 +917,6 @@ public class MainActivity extends Activity {
             setSwitchChecked(sw, value == 1);
             sw.setEnabled(value != -1);
         });
-    }
-
-    /**
-     * 调试口角色（peripheral ↔ host）。
-     * 这是最重的一档：切成 host 后该口不再具备 device 能力，
-     * USB 调试和同口的 CarLife/AOA 都会失效，所以独立成开关并二次确认，
-     * 不再捆绑在 USB 调试开关里。
-     */
-    private void confirmToggleUsbRole(boolean toPeripheral) {
-        String msg = toPeripheral
-                ? "把调试口切回 device(peripheral) 角色，恢复 USB 调试能力？"
-                : "把调试口切成 host 角色？\n该口将失去 device 能力，USB 调试与同口的 CarLife/AOA 都会失效。";
-        new android.app.AlertDialog.Builder(this)
-                .setTitle("主驾USB1 角色")
-                .setMessage(msg)
-                .setNegativeButton("取消", (dialog, which) -> updateUsbRoleStatus())
-                .setPositiveButton("确定", (dialog, which) -> toggleUsbRole(toPeripheral))
-                .show();
-    }
-
-    private void toggleUsbRole(boolean toPeripheral) {
-        new Thread(() -> {
-            String err = AdbCtl.setDebugPortRole(toPeripheral);
-            Log.i(TAG, "调试口角色切换 peripheral=" + toPeripheral + " 结果=" + (err == null ? "成功" : err));
-            runOnUiThread(() -> {
-                updateUsbRoleStatus();
-                toast(err == null ? "调试口角色已切换" : err);
-            });
-        }).start();
-    }
-
-    private void updateUsbRoleStatus() {
-        new Thread(() -> {
-            UsbHw.Controller port = AdbCtl.debugPort();
-            final boolean peripheral = port != null && port.isPeripheral();
-            final String detail = port == null ? "未探测到 USB 控制器" : ("节点: " + port.modePath);
-            runOnUiThread(() -> {
-                if (swUsbRole == null) return;
-                setSwitchChecked(swUsbRole, peripheral);
-                swUsbRole.setEnabled(port != null);
-                if (tvUsbRoleDetail != null) tvUsbRoleDetail.setText(detail);
-            });
-        }).start();
     }
 
     private void ensureUsb2PowerDefaultOn() {
