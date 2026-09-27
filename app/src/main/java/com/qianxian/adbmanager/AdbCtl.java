@@ -132,9 +132,25 @@ public final class AdbCtl {
             Log.w(TAG, "切换 adb_wifi_enabled 失败，回退到属性方式", e);
         }
         exec("setprop", "service.adb.tcp.port", PORT_OFF);
-        restartAdbd();
+
+        // USB 与无线是同一个 adbd 上的两个独立 transport，本来就不该互相牵连。
+        // 先热切换：只让 adbd 自己开/关 TLS 监听，进程不动，有线 USB 调试不受影响。
+        if (!applyWirelessHot(enabled)) {
+            // 有些 ROM 只在 adbd 启动时才决定要不要监听无线，热切换不生效，重启兜底。
+            Log.w(TAG, "热切换未生效，重启 adbd 兜底（会掐断有线调试连接）");
+            restartAdbd();
+        }
         if (!enabled) return "";
         return waitForPort();
+    }
+
+    /** 热切换：改完设置项后等 adbd 自己把监听/端口切过来，全程不碰 adbd 进程。 */
+    private static boolean applyWirelessHot(boolean enabled) {
+        for (int i = 0; i < PORT_WAIT_ROUNDS; i++) {
+            if (isPortEnabled(effectivePort()) == enabled) return true;
+            sleep(300);
+        }
+        return isPortEnabled(effectivePort()) == enabled;
     }
 
     /** 重启 adbd 让端口/开关生效。 */
@@ -298,15 +314,30 @@ public final class AdbCtl {
     }
 
     /**
+     * 无线 ADB 是否还需要 adbd 进程活着。
+     *
+     * 无线调试跑在**同一个 adbd 进程**里：`ctl.stop adbd` 会把无线调试一起掐掉
+     * （TLS 端口重新分配、配对码作废、已连的无线客户端断开）。
+     * 所以「用户希望开着」（含被系统重置、后台即将自动重开）或「当前确实在监听」都算还需要。
+     */
+    public static boolean wirelessNeedsAdbd(Context ctx) {
+        if (ctx == null) return false;
+        return isWirelessDesired(ctx) || isWirelessOn(ctx);
+    }
+
+    /**
      * 应用有线 USB 调试开关。
      *
      * 无论哪一档，都只会碰调试口那一个控制器：其他口（host 那一路的 U 盘 / 4G 模组）
      * 不经过 gadget，也不会被写角色节点，因此不受影响。
      *
+     * 关闭时有个特例：无线 ADB 还在用就不 stop adbd，只把 adb function 从 composition 里摘掉，
+     * 让 adbd 继续服务无线（见 {@link #wirelessNeedsAdbd}）。
+     *
      * @param level LEVEL_SILENT / LEVEL_CONFIG / LEVEL_ROLE
      * @return null 表示成功；否则返回失败原因
      */
-    public static String applyUsbAdb(boolean enabled, int level) {
+    public static String applyUsbAdb(Context ctx, boolean enabled, int level) {
         StringBuilder warn = new StringBuilder();
         UsbHw.Controller port = debugPort();
 
@@ -328,14 +359,36 @@ public final class AdbCtl {
             sleep(300);
         }
 
-        exec("setprop", enabled ? "ctl.start" : "ctl.stop", "adbd");
-        sleep(600);
+        // 关闭时不无脑 ctl.stop adbd：无线调试跑在同一个进程里，一停就把无线一起掐断。
+        // 无线还在用时只摘掉 composition 里的 adb function（有线口不再暴露 adb），adbd 留给无线继续跑。
+        final boolean keepAdbd = !enabled && wirelessNeedsAdbd(ctx);
+        if (keepAdbd) {
+            Log.i(TAG, "无线 ADB 仍在使用，关闭 USB 调试时保留 adbd 进程（仅切 composition）");
+        } else {
+            exec("setprop", enabled ? "ctl.start" : "ctl.stop", "adbd");
+            sleep(600);
+        }
 
-        boolean adbOk = isAdbServiceRunning() == enabled;
-        Log.i(TAG, String.format("applyUsbAdb enabled=%s level=%d port=%s config=%s state=%s adbdRunning=%s",
-                enabled, level, port, sysUsbConfig(), sysUsbState(), isAdbServiceRunning()));
+        if (keepAdbd && !isAdbServiceRunning()) {
+            // 这类车机的 init 会因为 composition 里没有 adb 而把 adbd 一起停掉，
+            // 光靠「不主动 stop」拦不住。这里立刻把它拉回来：有线仍是关的（config=none），
+            // 但无线调试能在 1 秒内恢复，不用等 AdbService 那 15 秒的修复节流。
+            // 端口由 adbd 重新分配，所以上层必须跟着刷新端口显示。
+            Log.w(TAG, "adbd 被 composition 变更带停，立即拉起以恢复无线 ADB");
+            startAdbd();
+            sleep(600);
+        }
+
+        boolean adbOk = keepAdbd ? isAdbServiceRunning() : (isAdbServiceRunning() == enabled);
+        Log.i(TAG, String.format(
+                "applyUsbAdb enabled=%s level=%d keepAdbd=%s port=%s config=%s state=%s adbdRunning=%s",
+                enabled, level, keepAdbd, port, sysUsbConfig(), sysUsbState(), isAdbServiceRunning()));
         if (!adbOk) {
-            warn.append("adbd 未").append(enabled ? "启动" : "停止");
+            if (keepAdbd) {
+                warn.append("adbd 被 composition 变更带停，无线 ADB 已中断 ");
+            } else {
+                warn.append("adbd 未").append(enabled ? "启动" : "停止");
+            }
         }
 
         String w = warn.toString().trim();
@@ -353,7 +406,7 @@ public final class AdbCtl {
      * @return null 表示成功；否则为失败原因（不阻断流程，仅提示）
      */
     public static String setUsbAdb(Context ctx, boolean enabled) {
-        String err = applyUsbAdb(enabled, LEVEL_DEFAULT);
+        String err = applyUsbAdb(ctx, enabled, LEVEL_DEFAULT);
         try {
             android.provider.Settings.Global.putInt(
                     ctx.getContentResolver(), android.provider.Settings.Global.ADB_ENABLED,

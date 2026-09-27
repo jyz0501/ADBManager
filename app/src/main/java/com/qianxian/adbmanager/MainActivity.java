@@ -76,6 +76,26 @@ public class MainActivity extends Activity {
     /** 防止程序化 setChecked 触发 OnCheckedChangeListener */
     private boolean suppressSwitch = false;
 
+    /**
+     * USB 调试切换进行中。
+     * 期间 2 秒轮询（updateStatus）不再回写开关，等真实状态确认后由切换流程一次性落定，
+     * 否则会出现「先切过去、被校正回来、再被轮询掰一次」的来回弹。
+     */
+    private boolean adbSwitchBusy = false;
+
+    /** 等 ADB 设置项落定的轮次（每轮 300ms，约 5 秒）。 */
+    private static final int ADB_SETTLE_ROUNDS = 16;
+
+    /** USB 供电节点写入后等真实值回落的轮次（每轮 150ms，约 1.5 秒）。 */
+    private static final int USB_POWER_SETTLE_ROUNDS = 10;
+
+    /**
+     * 正在切换中的 USB 供电开关。
+     * 期间 2 秒轮询不再回写开关，等真实值确认后再落定，避免先开后关地来回弹。
+     * 只在主线程上增删与查询。
+     */
+    private final java.util.Set<Switch> usbPowerBusy = new java.util.HashSet<>();
+
     /** 统一出口：关闭 Toast 时只写日志，保留原文便于排查。 */
     private void toast(String msg) {
         toast(msg, false);
@@ -139,42 +159,15 @@ public class MainActivity extends Activity {
         swAdb.setOnCheckedChangeListener((buttonView, isChecked) -> {
             if (suppressSwitch) return;
             Log.i(TAG, "========== ADB切换: " + (isChecked ? "开启" : "关闭") + " ==========");
-
-            swAdb.setEnabled(false);
-
-            new Thread(() -> {
-                String err = setAdbEnabled(isChecked);
-                try {
-                    Thread.sleep(1000);
-                } catch (InterruptedException e) {}
-
-                int actualState = Settings.Global.getInt(getContentResolver(), Settings.Global.ADB_ENABLED, -1);
-                boolean success = (isChecked && actualState == 1) || (!isChecked && actualState == 0);
-                final String detail = err;
-
-                runOnUiThread(() -> {
-                    updateStatus();
-                    swAdb.setEnabled(true);
-                    if (success && detail == null) {
-                        toast("ADB" + (isChecked ? "已开启" : "已关闭"));
-                    } else if (!success) {
-                        toast("ADB" + (isChecked ? "开启失败" : "关闭失败"));
-                    } else {
-                        toast("ADB 已切换，但底层有告警: " + detail);
-                    }
-                });
-            }).start();
+            applyUsbAdbSwitch(isChecked);
         });
         swWireless.setOnCheckedChangeListener((buttonView, isChecked) -> {
             if (suppressSwitch) return;
-            // 切换无线 ADB 必须重启 adbd，会掐断正在用的有线调试连接，先问一句
-            new Thread(() -> {
-                final boolean usbBusy = AdbCtl.isUsbAdbActive();
-                runOnUiThread(() -> {
-                    if (usbBusy) confirmWirelessAdb(isChecked);
-                    else applyWirelessAdb(isChecked);
-                });
-            }).start();
+            // USB 与无线是同一个 adbd 上的两个独立 transport：切无线走热切换（只改
+            // adb_wifi_enabled，adbd 自己起/停 TLS 监听），不杀进程，因此不会牵连有线 USB 调试，
+            // 也就不需要「会断开有线连接」的二次确认。只有极少数 ROM 热切换不生效才会重启兜底。
+            // 下发失败（端口没切过来）时回退到拨动前的状态，避免开关停在假状态上。
+            applyWirelessAdb(isChecked, !isChecked);
         });
 
         btnRevokeUsbAuth.setOnClickListener(v -> confirmRevokeUsbAuth());
@@ -203,12 +196,12 @@ public class MainActivity extends Activity {
 
         swUsb2Power.setOnCheckedChangeListener((buttonView, isChecked) -> {
             if (suppressSwitch) return;
-            toggleUsbPower("usb2power", swUsb2Power, "主驾USB1");
+            toggleUsbPower("usb2power", swUsb2Power, "主驾USB1", isChecked);
         });
 
         swUsb31Power.setOnCheckedChangeListener((buttonView, isChecked) -> {
             if (suppressSwitch) return;
-            toggleUsbPower("usb31power", swUsb31Power, "主驾USB2");
+            toggleUsbPower("usb31power", swUsb31Power, "主驾USB2", isChecked);
         });
 
 
@@ -363,9 +356,86 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    /**
+     * USB 调试开关：不再「先切 UI 再校正」，而是**拿到真实状态后才切**。
+     *
+     * 拨动后开关会被系统切成新状态，这里先拨回拨动前的状态并置灰、文案显示「开启中/关闭中」，
+     * 等底层状态确认后再由 {@link #updateStatus()} 一次性落到真实状态：
+     * - 成功 → 只切一次，切到目标状态；
+     * - 失败 → 真实状态仍是拨动前的状态，开关原地不动，只提示失败。
+     * 期间置 adbSwitchBusy，2 秒轮询不会再把开关掰回去。
+     */
+    private void applyUsbAdbSwitch(boolean target) {
+        if (adbSwitchBusy) return;
+        adbSwitchBusy = true;
+
+        // 开关先回到拨动前的状态：真实状态没确认前不假装已经生效
+        setSwitchChecked(swAdb, !target);
+        swAdb.setEnabled(false);
+        tvStatus.setText("ADB: " + (target ? "开启中..." : "关闭中..."));
+        tvStatus.setTextColor(Color.parseColor("#888888"));
+        statusIndicator.setBackgroundColor(Color.parseColor("#888888"));
+
+        new Thread(() -> {
+            final String err = setAdbEnabled(target);
+            final boolean ok = waitForAdbState(target);
+            Log.i(TAG, "ADB切换结果: 目标=" + (target ? "开" : "关") + " 成功=" + ok
+                    + " 告警=" + err);
+
+            runOnUiThread(() -> {
+                // 先解除 busy，让 updateStatus() 把开关落到真实状态
+                adbSwitchBusy = false;
+                swAdb.setEnabled(true);
+                updateStatus();
+
+                // 动过 adbd 就可能换了无线端口、作废了配对码：一并刷新，别让界面停在旧值
+                if (ok && !target) {
+                    updateWirelessStatus();
+                    markPairCodeStale();
+                }
+
+                if (!ok) {
+                    toast("ADB" + (target ? "开启失败" : "关闭失败"));
+                } else if (err != null) {
+                    toast("ADB 已切换，但底层有告警: " + err);
+                } else {
+                    toast("ADB" + (target ? "已开启" : "已关闭"));
+                }
+            });
+        }).start();
+    }
+
+    /** 轮询等 ADB 设置项落定到目标值：这类车机写设置项到真正生效有抖动，不能只查一次。 */
+    private boolean waitForAdbState(boolean target) {
+        final int want = target ? 1 : 0;
+        for (int i = 0; i < ADB_SETTLE_ROUNDS; i++) {
+            int v = Settings.Global.getInt(getContentResolver(), Settings.Global.ADB_ENABLED, -1);
+            if (v == want) {
+                sleepQuietly(300);
+                return true;
+            }
+            sleepQuietly(300);
+        }
+        return Settings.Global.getInt(getContentResolver(), Settings.Global.ADB_ENABLED, -1) == want;
+    }
+
+    private static void sleepQuietly(long ms) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     private void updateStatus() {
         int adbEnabled = Settings.Global.getInt(getContentResolver(), Settings.Global.ADB_ENABLED, 0);
         Log.i(TAG, "当前ADB状态: " + (adbEnabled == 1 ? "已开启(1)" : "已关闭(0)"));
+
+        // 底层状态行保持实时刷新
+        updateUsbDetail(adbEnabled == 1);
+
+        // 切换进行中：开关停在拨动前的状态、文案保持「进行中」，等真实状态确认后再落定
+        if (adbSwitchBusy) return;
 
         if (adbEnabled == 1) {
             tvStatus.setText("ADB: 已开启");
@@ -378,8 +448,6 @@ public class MainActivity extends Activity {
             statusIndicator.setBackgroundColor(Color.parseColor("#E74C3C"));
             setSwitchChecked(swAdb, false);
         }
-
-        updateUsbDetail(adbEnabled == 1);
     }
 
     /**
@@ -391,10 +459,13 @@ public class MainActivity extends Activity {
             String config = AdbCtl.sysUsbConfig();
             boolean running = AdbCtl.isAdbServiceRunning();
             UsbHw.Controller port = AdbCtl.debugPort();
-            final boolean consistent = (running == settingOn);
+            // 关了有线但无线还在用时，会故意保留 adbd：此时「设置项关 + adbd 在跑」是正常的，不算不一致
+            final boolean keepAdbd = !settingOn && AdbCtl.wirelessNeedsAdbd(MainActivity.this);
+            final boolean consistent = keepAdbd || (running == settingOn);
             final String text = "底层: config=" + (config.isEmpty() ? "-" : config)
                     + " | adbd=" + (running ? "在跑" : "已停")
-                    + " | 调试口=" + (port == null ? "未探测到" : port.toString());
+                    + " | 调试口=" + (port == null ? "未探测到" : port.toString())
+                    + (keepAdbd ? " | adbd 保留给无线ADB" : "");
             Log.i(TAG, "USB 底层状态: " + text + " | 设置项=" + (settingOn ? "开" : "关")
                     + " | 一致=" + consistent);
             runOnUiThread(() -> {
@@ -495,29 +566,42 @@ public class MainActivity extends Activity {
     }
 
     private void updateWirelessStatus() {
+        setSwitchChecked(swWireless, isPortOn(refreshWirelessText()));
+        renderPairedDevices();
+    }
+
+    /**
+     * 只刷新状态文案与 IP:端口，**不动开关**，返回当前端口。
+     * 取消弹窗时要按「拨动前的状态」回退开关，不能让真实状态再把它覆盖回去。
+     */
+    private String refreshWirelessText() {
+        String port = "";
         try {
             // 端口由 adbd 动态分配：优先无线调试的 TLS 端口，不再是固定 5555
-            String port = AdbCtl.effectivePort();
+            port = AdbCtl.effectivePort();
             Log.i(TAG, "当前无线ADB端口: " + port);
 
-            if (port != null && !port.isEmpty() && !port.equals("-1") && !port.equals("0")) {
+            if (isPortOn(port)) {
                 String ip = getLocalIpAddress();
                 tvWirelessStatus.setText("状态: 已开启");
                 tvWirelessStatus.setTextColor(Color.parseColor("#27AE60"));
                 tvIpPort.setText("IP: " + ip + ":" + port);
                 tvIpPort.setTextColor(Color.parseColor("#4CAF50"));
-                setSwitchChecked(swWireless, true);
             } else {
                 tvWirelessStatus.setText("状态: 未开启");
                 tvWirelessStatus.setTextColor(Color.parseColor("#888888"));
                 tvIpPort.setText("IP: -");
                 tvIpPort.setTextColor(Color.parseColor("#888888"));
-                setSwitchChecked(swWireless, false);
             }
         } catch (Exception e) {
             Log.e(TAG, "更新无线ADB状态失败", e);
         }
-        renderPairedDevices();
+        return port == null ? "" : port;
+    }
+
+    /** 端口属性是否代表无线 ADB 已开启：-1/0/空都算关。 */
+    private static boolean isPortOn(String port) {
+        return port != null && !port.isEmpty() && !port.equals("-1") && !port.equals("0");
     }
 
     private void setWirelessAdb(boolean enabled) {
@@ -527,18 +611,14 @@ public class MainActivity extends Activity {
         AdbCtl.setWirelessAdb(this, enabled);
     }
 
-    /** 有线调试正在用时的二次确认：重启 adbd 会把有线连接掐断。 */
-    private void confirmWirelessAdb(boolean enabled) {
-        new android.app.AlertDialog.Builder(this)
-                .setTitle("切换无线 ADB")
-                .setMessage("当前有线 USB 调试正在使用中。切换无线 ADB 需要重启 adbd，"
-                        + "会断开正在用的有线调试连接。是否继续？")
-                .setNegativeButton("取消", (dialog, which) -> updateWirelessStatus())
-                .setPositiveButton("继续", (dialog, which) -> applyWirelessAdb(enabled))
-                .show();
+    /** 回退：开关拨回拨动前的状态，并按真实状态刷新文案。 */
+    private void revertWirelessSwitch(boolean previous) {
+        Log.i(TAG, "========== 切换无线ADB未生效，回退到: " + (previous ? "开" : "关") + " ==========");
+        setSwitchChecked(swWireless, previous);
+        refreshWirelessText();
     }
 
-    private void applyWirelessAdb(boolean enabled) {
+    private void applyWirelessAdb(boolean enabled, boolean previous) {
         Log.i(TAG, "========== " + (enabled ? "开启" : "关闭") + "无线ADB ==========");
         swWireless.setEnabled(false);
         tvWirelessStatus.setText(enabled ? "状态: 开启中..." : "状态: 关闭中...");
@@ -546,9 +626,13 @@ public class MainActivity extends Activity {
         new Thread(() -> {
             setWirelessAdb(enabled);
             runOnUiThread(() -> {
-                updateWirelessStatus();
+                final boolean ok = isPortOn(refreshWirelessText()) == enabled;
+                // 下发失败就回退到拨动前的状态，避免开关停在假状态上
+                if (!ok) revertWirelessSwitch(previous);
                 swWireless.setEnabled(true);
-                toast("无线ADB" + (enabled ? "已开启" : "已关闭"));
+                renderPairedDevices();
+                toast(ok ? "无线ADB" + (enabled ? "已开启" : "已关闭")
+                        : "无线ADB" + (enabled ? "开启失败" : "关闭失败"));
             });
         }).start();
     }
@@ -625,6 +709,17 @@ public class MainActivity extends Activity {
         }
         ivPairQr.setImageBitmap(bmp);
         ivPairQr.setVisibility(View.VISIBLE);
+    }
+
+    /** adbd 重启后配对码与配对端口都作废，界面上不能继续挂着旧值误导人。 */
+    private void markPairCodeStale() {
+        if (currentPairCode.isEmpty()) return;
+        currentPairCode = "";
+        ivPairQr.setVisibility(View.GONE);
+        tvPairCode.setText("已失效，请重新生成");
+        tvPairCode.setTextColor(Color.parseColor("#E67E22"));
+        tvPairPort.setText("配对端口: -");
+        Log.i(TAG, "adbd 已重启，配对码作废");
     }
 
     /** 配对二维码里的服务名：adb-<serial>，与系统 mDNS 配对服务命名一致。 */
@@ -868,41 +963,69 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void toggleUsbPower(String powerFile, Switch sw, String label) {
+    /**
+     * USB 供电开关：与 USB 调试开关同一套机制——**等真实值确认后才切**。
+     *
+     * 拨动后开关会被系统切成新状态，这里先拨回拨动前的状态并置灰，
+     * 等供电节点读到目标值后由 {@link #updateUsbPowerSwitch} 一次性落定：
+     * - 成功 → 只切一次，切到目标状态；
+     * - 未生效 → 真实值还是拨动前的状态，开关原地不动，只提示未生效。
+     */
+    private void toggleUsbPower(String powerFile, Switch sw, String label, boolean target) {
         String path = "/sys/devices/platform/usbpower/" + powerFile;
+        if (usbPowerBusy.contains(sw)) return;
+        usbPowerBusy.add(sw);
+
+        // 真实状态没确认前不假装生效
+        setSwitchChecked(sw, !target);
+        sw.setEnabled(false);
+
         new Thread(() -> {
+            final int want = target ? 1 : 0;
+            int writeExit;
+            int actual;
             try {
-                int currentValue = readUsbPowerValue(path);
-                int targetValue = currentValue == 1 ? 0 : 1;
-
-                
-                int writeExit = writeUsbPower(path, targetValue);
-
-                
-                Thread.sleep(300);
-                int actual = readUsbPowerValue(path);
-                boolean applied = (actual == targetValue);
-
-                Log.i(TAG, "USB供电切换: " + powerFile + " 期望=" + targetValue
-                        + " 实际=" + actual + " 写exit=" + writeExit
-                        + " 生效=" + applied);
-
-                final int finalActual = actual;
-                final boolean finalApplied = applied;
-                runOnUiThread(() -> {
-                    updateUsbPowerSwitch(powerFile, sw);
-                    if (finalApplied) {
-                        toast(label + (targetValue == 1 ? "供电已开启" : "供电已关闭"));
-                    } else {
-                        String state = finalActual == 1 ? "开" : finalActual == 0 ? "关" : "读取失败";
-                        toast("切换未生效（实际状态: " + state + "）", true);
-                    }
-                });
+                writeExit = writeUsbPower(path, want);
+                actual = waitForUsbPowerValue(path, want);
             } catch (Exception e) {
                 Log.e(TAG, "USB供电控制失败", e);
-                runOnUiThread(() -> toast("控制失败: " + e.getMessage()));
+                final String msg = e.getMessage();
+                runOnUiThread(() -> {
+                    usbPowerBusy.remove(sw);
+                    updateUsbPowerSwitch(powerFile, sw);
+                    toast("控制失败: " + msg);
+                });
+                return;
             }
+
+            final boolean applied = (actual == want);
+            final int finalActual = actual;
+            Log.i(TAG, "USB供电切换: " + powerFile + " 期望=" + want
+                    + " 实际=" + finalActual + " 写exit=" + writeExit
+                    + " 生效=" + applied);
+
+            runOnUiThread(() -> {
+                // 先解除 busy，让 updateUsbPowerSwitch 把开关落到真实状态
+                usbPowerBusy.remove(sw);
+                updateUsbPowerSwitch(powerFile, sw);
+                if (applied) {
+                    toast(label + (target ? "供电已开启" : "供电已关闭"));
+                } else {
+                    String state = finalActual == 1 ? "开" : finalActual == 0 ? "关" : "读取失败";
+                    toast("切换未生效（实际状态: " + state + "）", true);
+                }
+            });
         }).start();
+    }
+
+    /** 供电节点写入后要过一会儿才回落，轮询等真实值到位，不能只 sleep 一次就判定。 */
+    private int waitForUsbPowerValue(String path, int want) {
+        for (int i = 0; i < USB_POWER_SETTLE_ROUNDS; i++) {
+            sleepQuietly(150);
+            int v = readUsbPowerValue(path);
+            if (v == want) return v;
+        }
+        return readUsbPowerValue(path);
     }
 
     private void updateUsbPowerStatus() {
@@ -914,6 +1037,8 @@ public class MainActivity extends Activity {
         String path = "/sys/devices/platform/usbpower/" + powerFile;
         int value = readUsbPowerValue(path);
         runOnUiThread(() -> {
+            // 切换进行中：开关停在拨动前的状态，等真实值确认后再落定
+            if (usbPowerBusy.contains(sw)) return;
             setSwitchChecked(sw, value == 1);
             sw.setEnabled(value != -1);
         });
