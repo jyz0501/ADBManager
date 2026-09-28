@@ -211,7 +211,7 @@ public final class AdbCtl {
      *
      * 走 `IAdbManager.clearDebuggingKeys()`（由 system_server 操作 adb keystore），
      * 而不是自己删 `/data/misc/adb/adb_keys`——后者会被 SELinux 拦掉，
-     * 也不会触发系统侧的 keyStore 重新加载。<｜hy_place▁holder▁no▁813｜>
+     * 也不会触发系统侧的 keyStore 重新加载。
      * 注意：这里故意不重启 adbd，
      * 否则会掐断当前正在调试的连接；被撤销的电脑下次连接时需要重新确认授权。
      *
