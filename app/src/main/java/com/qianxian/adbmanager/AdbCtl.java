@@ -33,6 +33,9 @@ public final class AdbCtl {
     /** 端口下发后等待 adbd 重新上报的轮次（每轮 300ms）。 */
     private static final int PORT_WAIT_ROUNDS = 20;
 
+    /** composition 下发后等它真正生效的轮次（每轮 200ms，约 3 秒），对齐 UsbHw.setMode 的回读校验。 */
+    private static final int CONFIG_SETTLE_ROUNDS = 15;
+
     private static final String TAG = "AdbManager.Ctl";
     private static final String PREF = "adbmanager_state";
     private static final String KEY_WIRELESS_DESIRED = "wireless_desired";
@@ -175,6 +178,21 @@ public final class AdbCtl {
         return "";
     }
 
+    /**
+     * 等 composition 真正生效：生效值里是否已带上/摘掉 adb。
+     *
+     * 切换 composition 会触发调试口重新枚举，不是写完属性就立刻生效，所以要回读确认。
+     *
+     * @param wantAdb true=等「含 adb」（开启），false=等「不含 adb」（关闭）
+     */
+    private static boolean waitForUsbState(boolean wantAdb) {
+        for (int i = 0; i < CONFIG_SETTLE_ROUNDS; i++) {
+            if (effectiveUsbConfig().contains("adb") == wantAdb) return true;
+            sleep(200);
+        }
+        return effectiveUsbConfig().contains("adb") == wantAdb;
+    }
+
     // ---------- 自动修复 ----------
 
     /**
@@ -280,12 +298,24 @@ public final class AdbCtl {
     }
 
     /**
-     * 有线 USB 调试是否真的可用：adbd 在跑且当前 composition 含 adb。
-     * 用来判断「现在重启 adbd 会不会掐断一条正在用的有线连接」——
-     * 无线客户端能靠 netstat 查到，有线客户端查不到，只能这样保守判定。
+     * 当前真正生效的 composition。
+     *
+     * `sys.usb.state` 是实际生效值，`sys.usb.config` 只是下发下去的期望值，所以优先看 state；
+     * 少数 ROM 不回写 state，此时退化为看 config，免得恒判成「没开」。
+     */
+    public static String effectiveUsbConfig() {
+        String state = sysUsbState();
+        return state.isEmpty() ? sysUsbConfig() : state;
+    }
+
+    /**
+     * 有线 USB 调试是否真的可用：adbd 在跑 且 当前生效的 composition 含 adb。
+     *
+     * 这是开关成败与界面显示的**唯一**判定依据——只查设置项的话，
+     * 「设置里开着、但底层 adbd 没起来 / composition 没生效」会被当成已开启。
      */
     public static boolean isUsbAdbActive() {
-        return isAdbServiceRunning() && sysUsbState().contains("adb");
+        return isAdbServiceRunning() && effectiveUsbConfig().contains("adb");
     }
 
     /**
@@ -326,6 +356,16 @@ public final class AdbCtl {
     }
 
     /**
+     * 关闭有线 USB 调试时是否要保留 adbd 进程（无线调试跑在同一个进程里）。
+     *
+     * 抽成方法是为了让 `applyUsbAdb` 与 `setUsbAdb` 用同一把尺子，
+     * 否则两处各判一次、结果漂移，就会出现「底层保住了、写完设置项又被停掉」的互相抵消。
+     */
+    private static boolean shouldKeepAdbd(Context ctx, boolean enabled) {
+        return !enabled && wirelessNeedsAdbd(ctx);
+    }
+
+    /**
      * 应用有线 USB 调试开关。
      *
      * 无论哪一档，都只会碰调试口那一个控制器：其他口（host 那一路的 U 盘 / 4G 模组）
@@ -361,7 +401,7 @@ public final class AdbCtl {
 
         // 关闭时不无脑 ctl.stop adbd：无线调试跑在同一个进程里，一停就把无线一起掐断。
         // 无线还在用时只摘掉 composition 里的 adb function（有线口不再暴露 adb），adbd 留给无线继续跑。
-        final boolean keepAdbd = !enabled && wirelessNeedsAdbd(ctx);
+        final boolean keepAdbd = shouldKeepAdbd(ctx, enabled);
         if (keepAdbd) {
             Log.i(TAG, "无线 ADB 仍在使用，关闭 USB 调试时保留 adbd 进程（仅切 composition）");
         } else {
@@ -379,15 +419,34 @@ public final class AdbCtl {
             sleep(600);
         }
 
-        boolean adbOk = keepAdbd ? isAdbServiceRunning() : (isAdbServiceRunning() == enabled);
+        // composition 是否真的生效：sys.usb.config 只是「期望值」，真正生效要看 sys.usb.state。
+        // 写完必须回读校验，否则「写了但没生效」会被当成成功（对齐 UsbHw.setMode 的做法）。
+        // 刻意放在 adbd 启停之后——部分 ROM 要等 adbd 起来才会把 state 更新过来。
+        if (level >= LEVEL_CONFIG && !waitForUsbState(enabled)) {
+            warn.append("composition 未生效(config=").append(sysUsbConfig())
+                    .append(" state=").append(sysUsbState()).append(") ");
+        }
+
+        // 判定必须落在「底层真实状态」上，不能只看 adbd 在不在：
+        // - 普通场景：有线 USB 调试是否真的可用（adbd 在跑 且 composition 真的带上/摘掉 adb）；
+        // - keepAdbd（关有线、保无线）：有线必须真的关掉，且 adbd 必须还活着给无线用。
+        final boolean usbActive = isUsbAdbActive();
+        boolean adbOk = keepAdbd
+                ? (isAdbServiceRunning() && !usbActive)
+                : (usbActive == enabled);
         Log.i(TAG, String.format(
-                "applyUsbAdb enabled=%s level=%d keepAdbd=%s port=%s config=%s state=%s adbdRunning=%s",
-                enabled, level, keepAdbd, port, sysUsbConfig(), sysUsbState(), isAdbServiceRunning()));
+                "applyUsbAdb enabled=%s level=%d keepAdbd=%s port=%s config=%s state=%s "
+                        + "adbdRunning=%s usbActive=%s adbOk=%s",
+                enabled, level, keepAdbd, port, sysUsbConfig(), sysUsbState(),
+                isAdbServiceRunning(), usbActive, adbOk));
         if (!adbOk) {
             if (keepAdbd) {
-                warn.append("adbd 被 composition 变更带停，无线 ADB 已中断 ");
+                warn.append("无线 ADB 依赖的 adbd 未存活，无线已中断 ");
             } else {
-                warn.append("adbd 未").append(enabled ? "启动" : "停止");
+                warn.append("USB 调试未真正").append(enabled ? "开启" : "关闭")
+                        .append("(config=").append(sysUsbConfig())
+                        .append(" state=").append(sysUsbState())
+                        .append(" adbd=").append(isAdbServiceRunning() ? "在跑" : "已停").append(") ");
             }
         }
 
@@ -413,6 +472,18 @@ public final class AdbCtl {
                     enabled ? 1 : 0);
         } catch (Exception e) {
             Log.e(TAG, "写入 ADB_ENABLED 失败", e);
+        }
+        // 这台车机会监听 ADB_ENABLED 自行重算 composition 并连带停掉 adbd，
+        // 于是 applyUsbAdb 里刚保住的 adbd 可能在这一步又被停掉、无线被掐——两处逻辑互相抵消。
+        // 无线还依赖 adbd 时，写完后补一次存活校验并拉起。
+        if (shouldKeepAdbd(ctx, enabled) && !isAdbServiceRunning()) {
+            Log.w(TAG, "设置项写入后 adbd 被停，立即拉起以保住无线 ADB");
+            startAdbd();
+            sleep(600);
+            if (!isAdbServiceRunning()) {
+                String extra = "adbd 未能拉起，无线 ADB 已中断";
+                err = (err == null || err.isEmpty()) ? extra : err + extra;
+            }
         }
         return err;
     }

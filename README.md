@@ -95,11 +95,44 @@ bash ./build.sh
 
 ### 签名
 
-构建时用 **AOSP 公开的 platform 测试密钥**（`CN=Android` / `android@android.com`）签名：
+默认用 **AOSP 公开的 platform 测试密钥（公签）**，证书指纹固定为：
 
-- 首次构建会自动从 AOSP 仓库下载并缓存到 `sign/`（该目录已在 `.gitignore` 中，不会入库）；后续构建直接复用；
-- 想换源：设置环境变量 `AOSP_KEY_BASE`（备用源 `AOSP_KEY_BASE_MIRROR`）；
-- 若目标 ROM 用的是**厂商私有 platform key**，把自己的 `platform.pk8` / `platform.x509.pem` 放进 `sign/` 即可覆盖——存在且非空时优先使用本地密钥。签名不匹配会导致 `INSTALL_FAILED_SHARED_USER_INCOMPATIBLE`。
+```
+SHA-256: C8A2E9BCCF597C2FB6DC66BEE293FC13F2FC47EC77BC6B2B0D52C11F51192AB8
+```
+
+- 首次构建自动下载到 `sign/`（已 `.gitignore`，不入库），后续复用；
+- 想明确「只用公签」、不想被 `sign/` 里别的文件影响：`USE_AOSP_TESTKEY=1 bash ./build.sh`
+  （公签会单独缓存在 `sign/aosp/`，且下载后按上面的指纹校验，下载错文件会直接报错）；
+- 想换源：`AOSP_KEY_BASE`（备用源 `AOSP_KEY_BASE_MIRROR`）；
+- 构建时会打印所用证书的 SHA-256，**并对产物做回验**（v1+v2 均有效、指纹一致），不一致直接构建失败——避免「以为换了 key，产物其实还是旧的」。
+
+### 装不上（应用未安装 / 签名错误）怎么查
+
+本应用是 platform 签名的系统应用（`sharedUserId=android.uid.system`），
+**APK 签名必须与车机 ROM 的 platform 密钥完全一致**，否则报 `INSTALL_FAILED_SHARED_USER_INCOMPATIBLE`。
+
+按顺序自测（连上 adb 后执行）：
+
+```bash
+# 1) 这台 ROM 到底是不是公签(test-keys)
+adb shell getprop ro.build.tags          # test-keys → 可以装；release-keys → 装不了
+
+# 2) 取 ROM 自己的 platform 证书，和上面的公签指纹对比
+adb pull /system/framework/framework-res.apk /tmp/fr.apk
+java -jar tools/apksigner.jar verify --print-certs /tmp/fr.apk
+
+# 3) 车机上是不是已经装了同包名但不同签名的旧版（同名不同签名无法覆盖安装）
+adb shell dumpsys package com.qianxian.adbmanager | grep -i versionName
+```
+
+结论与处理：
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| `ro.build.tags=release-keys` | ROM 用厂商私有 platform key | 必须拿到该车型的 `platform.pk8` / `platform.x509.pem` 重签（放 `sign/` 或用 `PLATFORM_PK8`/`PLATFORM_PEM` 指定）；拿不到就装不了，这是 Android 的硬限制 |
+| 指纹不一致但 ROM 是 test-keys | 装了别的渠道/别的密钥打的包 | 先 `adb uninstall com.qianxian.adbmanager`（老包名还要 `adb uninstall com.vendor.adbmanager`），再装 |
+| `INSTALL_FAILED_UPDATE_INCOMPATIBLE` | 同包名不同签名 | 同上，先卸载 |
 
 ## 安装
 
@@ -107,8 +140,12 @@ bash ./build.sh
 adb install -r "$(ls -t bin/apk/ADBManager_v*.apk | head -1)"
 ```
 
+> 若车机上装有**其它签名**版本的 ADBManager（含 v1.6.x 及更早的旧包名 `com.vendor.adbmanager`），
+> 覆盖安装会被签名校验挡掉，需先卸载再装。
+
 ## 版本历史
 
+- **v2.2.0+（构建）**：`build.sh` 增加密钥自检与产物回验——构建前校验 pk8/x509 是否为同一对密钥、打印所用证书 SHA-256，签名后回验 APK 指纹与 v1/v2 有效性，不一致即构建失败；新增 `USE_AOSP_TESTKEY=1`（强制只用 AOSP 公签，独立缓存并校验指纹）、`PLATFORM_PK8` / `PLATFORM_PEM` / `PLATFORM_KS` 系列环境变量；使用 AOSP 公签时给出适用 ROM 提示
 - **v2.2.0**（2026-09-27）：无线 ADB 改为**热切换**（`AdbCtl.applyWirelessHot()`：只改 `adb_wifi_enabled`，等 adbd 自己起/停 TLS 监听，不动进程），不再无条件重启 adbd，因此切无线不再牵连有线 USB 调试；据此移除切换无线前的「会断开有线调试」二次确认（下发未生效时回退开关到拨动前状态）；USB 调试、USB 供电开关统一改为「真实状态确认后才落定」（先停在旧状态 + 置灰 + 「开启中/关闭中」，轮询等底层生效，失败原地回退），新增 `adbSwitchBusy` / `usbPowerBusy` 避免轮询把进行中的开关掰回去；新增 `AdbCtl.wirelessNeedsAdbd()`；动过 adbd 后清除界面上的旧配对码与配对端口
 - **v2.1.0**（2026-09-23）：移除右栏「主驾USB1 角色」开关及其 `AdbCtl.setDebugPortRole()`——开启 USB 调试时 `applyUsbAdb` 会自动把停在 host 的调试口拉回 peripheral，手动切回已无意义，而主动切 host 是破坏性操作且无日常场景；角色状态看左栏底层状态行的「调试口」即可。作为补偿，2 秒轮询改为刷新 `updateStatus()`，左栏那行保持实时
 - **v2.0.0**（2026-09-23）：USB 调试按硬件接口分档，默认不再把调试口切成 host（避免同口 CarLife/AOA 失效）；新增 `UsbHw` 动态探测控制器（不再硬编码 `a600000`）并回读校验；关闭时 `sys.usb.config` 由 `mtp` 改为 `none`；默认关闭改走与手动开关同一出口（`AdbCtl.setUsbAdb`），并**改为只在开机广播执行一次**（原先挂在 Activity 启动上，每次开界面都掐断 USB 调试）；设置项改为**最后写入**（避免 ROM 监听 `adb_enabled` 自行重算 composition 覆盖我们的写入）；左栏新增底层状态行；右栏新增「主驾USB1 角色」独立开关；切换无线 ADB 前若有线调试在用的会二次确认

@@ -83,8 +83,15 @@ public class MainActivity extends Activity {
      */
     private boolean adbSwitchBusy = false;
 
-    /** 等 ADB 设置项落定的轮次（每轮 300ms，约 5 秒）。 */
+    /** 等底层 USB 调试真正生效的轮次（每轮 300ms，约 5 秒）。 */
     private static final int ADB_SETTLE_ROUNDS = 16;
+
+    /** 切换失败时顶栏文案的保留时长：Toast 默认关闭，失败原因得在界面上停留一会儿才看得见。 */
+    private static final long USB_FAIL_HINT_MS = 5000L;
+
+    /** 最近一次切换失败的提示；在 usbAdbFailUntilMs 之前优先于常规状态显示。 */
+    private String usbAdbFailMsg = "";
+    private long usbAdbFailUntilMs = 0L;
 
     /** USB 供电节点写入后等真实值回落的轮次（每轮 150ms，约 1.5 秒）。 */
     private static final int USB_POWER_SETTLE_ROUNDS = 10;
@@ -378,7 +385,9 @@ public class MainActivity extends Activity {
 
         new Thread(() -> {
             final String err = setAdbEnabled(target);
-            final boolean ok = waitForAdbState(target);
+            // 成败只看底层真实状态（adbd 在跑 且 composition 真的带上/摘掉 adb）。
+            // 不能只看我们写入的设置项——设置项几乎必然写成功，那样「成功」判定就永远为真。
+            final boolean ok = waitForUsbAdbActive(target);
             Log.i(TAG, "ADB切换结果: 目标=" + (target ? "开" : "关") + " 成功=" + ok
                     + " 告警=" + err);
 
@@ -395,7 +404,16 @@ public class MainActivity extends Activity {
                 }
 
                 if (!ok) {
-                    toast("ADB" + (target ? "开启失败" : "关闭失败"));
+                    // 底层没切过去就拨回拨动前的状态，别让开关停在假状态上
+                    setSwitchChecked(swAdb, !target);
+                    String msg = "ADB" + (target ? "开启失败" : "关闭失败")
+                            + (err != null ? "(" + err.trim() + ")" : "");
+                    usbAdbFailMsg = msg;
+                    usbAdbFailUntilMs = System.currentTimeMillis() + USB_FAIL_HINT_MS;
+                    tvStatus.setText(msg);
+                    tvStatus.setTextColor(Color.parseColor("#E74C3C"));
+                    statusIndicator.setBackgroundColor(Color.parseColor("#E74C3C"));
+                    toast(msg, true);
                 } else if (err != null) {
                     toast("ADB 已切换，但底层有告警: " + err);
                 } else {
@@ -405,18 +423,18 @@ public class MainActivity extends Activity {
         }).start();
     }
 
-    /** 轮询等 ADB 设置项落定到目标值：这类车机写设置项到真正生效有抖动，不能只查一次。 */
-    private boolean waitForAdbState(boolean target) {
-        final int want = target ? 1 : 0;
+    /**
+     * 轮询等底层 USB 调试真正切到目标状态（每轮 300ms，约 5 秒）。
+     *
+     * 判定用 {@link AdbCtl#isUsbAdbActive()}：adbd 在跑 且 生效的 composition 带上/摘掉 adb。
+     * 这类车机从下发到真正生效有抖动（要重新枚举一次），不能只查一次。
+     */
+    private boolean waitForUsbAdbActive(boolean target) {
         for (int i = 0; i < ADB_SETTLE_ROUNDS; i++) {
-            int v = Settings.Global.getInt(getContentResolver(), Settings.Global.ADB_ENABLED, -1);
-            if (v == want) {
-                sleepQuietly(300);
-                return true;
-            }
+            if (AdbCtl.isUsbAdbActive() == target) return true;
             sleepQuietly(300);
         }
-        return Settings.Global.getInt(getContentResolver(), Settings.Global.ADB_ENABLED, -1) == want;
+        return AdbCtl.isUsbAdbActive() == target;
     }
 
     private static void sleepQuietly(long ms) {
@@ -431,22 +449,33 @@ public class MainActivity extends Activity {
         int adbEnabled = Settings.Global.getInt(getContentResolver(), Settings.Global.ADB_ENABLED, 0);
         Log.i(TAG, "当前ADB状态: " + (adbEnabled == 1 ? "已开启(1)" : "已关闭(0)"));
 
-        // 底层状态行保持实时刷新
+        // 状态行与开关都由 updateUsbDetail 在子线程读到底层真实状态后回主线程落定。
+        // 这里不再按设置项直接切开关——否则「设置项开着、底层没开」会一直被显示成已开启。
         updateUsbDetail(adbEnabled == 1);
+    }
 
-        // 切换进行中：开关停在拨动前的状态、文案保持「进行中」，等真实状态确认后再落定
+    /**
+     * 按**底层真实状态**落定 USB 调试开关与顶栏文案。
+     * 切换进行中（adbSwitchBusy）保持不动，等切换流程自己收尾。
+     */
+    private void applyUsbAdbUi(boolean usbActive) {
         if (adbSwitchBusy) return;
-
-        if (adbEnabled == 1) {
+        setSwitchChecked(swAdb, usbActive);
+        // 刚切换失败时优先显示失败原因，别被常规状态文案立刻盖掉
+        if (System.currentTimeMillis() < usbAdbFailUntilMs) {
+            tvStatus.setText(usbAdbFailMsg);
+            tvStatus.setTextColor(Color.parseColor("#E74C3C"));
+            statusIndicator.setBackgroundColor(Color.parseColor("#E74C3C"));
+            return;
+        }
+        if (usbActive) {
             tvStatus.setText("ADB: 已开启");
             tvStatus.setTextColor(Color.parseColor("#27AE60"));
             statusIndicator.setBackgroundColor(Color.parseColor("#27AE60"));
-            setSwitchChecked(swAdb, true);
         } else {
             tvStatus.setText("ADB: 已关闭");
             tvStatus.setTextColor(Color.parseColor("#E74C3C"));
             statusIndicator.setBackgroundColor(Color.parseColor("#E74C3C"));
-            setSwitchChecked(swAdb, false);
         }
     }
 
@@ -461,17 +490,24 @@ public class MainActivity extends Activity {
             UsbHw.Controller port = AdbCtl.debugPort();
             // 关了有线但无线还在用时，会故意保留 adbd：此时「设置项关 + adbd 在跑」是正常的，不算不一致
             final boolean keepAdbd = !settingOn && AdbCtl.wirelessNeedsAdbd(MainActivity.this);
-            final boolean consistent = keepAdbd || (running == settingOn);
+            // 底层真实状态：adbd 在跑 且 生效的 composition 真的带上了 adb。
+            // keepAdbd 时 adbd 继续跑但 composition 里没有 adb，usbActive 仍为 false，
+            // 正好等于「有线确实关了」，因此不需要为它开特例。
+            final boolean usbActive = AdbCtl.isUsbAdbActive();
+            final boolean consistent = (usbActive == settingOn);
+            final String state = AdbCtl.sysUsbState();
             final String text = "底层: config=" + (config.isEmpty() ? "-" : config)
+                    + " | state=" + (state.isEmpty() ? "-" : state)
                     + " | adbd=" + (running ? "在跑" : "已停")
                     + " | 调试口=" + (port == null ? "未探测到" : port.toString())
                     + (keepAdbd ? " | adbd 保留给无线ADB" : "");
             Log.i(TAG, "USB 底层状态: " + text + " | 设置项=" + (settingOn ? "开" : "关")
-                    + " | 一致=" + consistent);
+                    + " | 有线可用=" + usbActive + " | 一致=" + consistent);
             runOnUiThread(() -> {
                 if (tvUsbDetail == null) return;
                 tvUsbDetail.setText(text);
                 tvUsbDetail.setTextColor(Color.parseColor(consistent ? "#888888" : "#E67E22"));
+                applyUsbAdbUi(usbActive);
             });
         }).start();
     }
