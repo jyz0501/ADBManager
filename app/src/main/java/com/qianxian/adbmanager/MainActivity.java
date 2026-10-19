@@ -63,9 +63,6 @@ public class MainActivity extends Activity {
     private android.widget.LinearLayout llPairedDevices;
     private TextView tvPairedEmpty;
 
-    private Switch swUsb2Power;
-    private Switch swUsb31Power;
-
     private WirelessPairingHelper pairingHelper;
 
         private final android.os.Handler usbPollHandler = new android.os.Handler(android.os.Looper.getMainLooper());
@@ -92,16 +89,6 @@ public class MainActivity extends Activity {
     /** 最近一次切换失败的提示；在 usbAdbFailUntilMs 之前优先于常规状态显示。 */
     private String usbAdbFailMsg = "";
     private long usbAdbFailUntilMs = 0L;
-
-    /** USB 供电节点写入后等真实值回落的轮次（每轮 150ms，约 1.5 秒）。 */
-    private static final int USB_POWER_SETTLE_ROUNDS = 10;
-
-    /**
-     * 正在切换中的 USB 供电开关。
-     * 期间 2 秒轮询不再回写开关，等真实值确认后再落定，避免先开后关地来回弹。
-     * 只在主线程上增删与查询。
-     */
-    private final java.util.Set<Switch> usbPowerBusy = new java.util.HashSet<>();
 
     /** 统一出口：关闭 Toast 时只写日志，保留原文便于排查。 */
     private void toast(String msg) {
@@ -147,19 +134,12 @@ public class MainActivity extends Activity {
         tvPairedEmpty = findViewById(R.id.tv_paired_empty);
         btnCheckUpdate = findViewById(R.id.btn_check_update);
 
-        swUsb2Power = findViewById(R.id.sw_usb2_power);
-        swUsb31Power = findViewById(R.id.sw_usb31_power);
-
-
-
         tvVersion.setText("v" + appVersionName());
 
         grantAllRuntimePermissions();
         updateStatus();
         updateWirelessStatus();
-        updateUsbPowerStatus();
         updateConnectionStatus();
-        ensureUsb2PowerDefaultOn();
 
         pairingHelper = new WirelessPairingHelper(this);
 
@@ -200,17 +180,6 @@ public class MainActivity extends Activity {
             Log.i(TAG, "========== 点击检测更新 ==========");
             checkUpdateFromServer();
         });
-
-        swUsb2Power.setOnCheckedChangeListener((buttonView, isChecked) -> {
-            if (suppressSwitch) return;
-            toggleUsbPower("usb2power", swUsb2Power, "主驾USB1", isChecked);
-        });
-
-        swUsb31Power.setOnCheckedChangeListener((buttonView, isChecked) -> {
-            if (suppressSwitch) return;
-            toggleUsbPower("usb31power", swUsb31Power, "主驾USB2", isChecked);
-        });
-
 
         try {
             // Android 12+ 起后台/前台切换受限，统一用 startForegroundService 拉保活服务
@@ -284,61 +253,14 @@ public class MainActivity extends Activity {
         }
     }
 
-    private String execReadAll(String... cmd) {
-        try {
-            java.lang.Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
-            BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()));
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = br.readLine()) != null) {
-                sb.append(line).append("\n");
-            }
-            p.waitFor();
-            return sb.toString();
-        } catch (Exception e) {
-            return "";
-        }
-    }
-
-    /** 获取 adbd 监听端口集合（TCP 5555 + TLS 动态端口） */
-    private java.util.Set<String> getAdbdPorts() {
-        java.util.Set<String> ports = new java.util.HashSet<>();
-        String tcp = execReadLine("getprop", "service.adb.tcp.port");
-        String tls = execReadLine("getprop", "service.adb.tls.port");
-        for (String p : new String[]{tcp, tls}) {
-            if (p != null && p.matches("\\d+") && !p.equals("-1") && !p.equals("0")) {
-                ports.add(p);
-            }
-        }
-        return ports;
-    }
-
-    /** 当前是否有客户端连接在 adbd 端口上（USB 之外的网络连接） */
+    /**
+     * 当前连在 adbd 上的无线客户端 IP。
+     *
+     * 解析统一走 `AdbCtl.activeClients()`（netstat 不可用时回退 `/proc/net/tcp`），
+     * 界面与后台修复判定共用一套结果，避免两处各判一次结果漂移。
+     */
     private java.util.List<String> getWirelessClients() {
-        java.util.List<String> clients = new java.util.ArrayList<>();
-        java.util.Set<String> ports = getAdbdPorts();
-        if (ports.isEmpty()) return clients;
-
-        String netstat = execReadAll("netstat", "-tn");
-        for (String line : netstat.split("\n")) {
-            if (!line.contains("ESTABLISHED")) continue;
-            String[] fields = line.trim().split("\\s+");
-            if (fields.length < 5) continue;
-            String local = fields[3];
-            String peer = fields[4];
-            String localPort = local.substring(local.lastIndexOf(':') + 1);
-            if (ports.contains(localPort)) {
-                String peerIp = peer.substring(0, peer.lastIndexOf(':'));
-                // 去掉 IPv6 映射前缀，便于阅读
-                if (peerIp.startsWith("::ffff:")) {
-                    peerIp = peerIp.substring(7);
-                }
-                if (!peerIp.equals("127.0.0.1") && !clients.contains(peerIp)) {
-                    clients.add(peerIp);
-                }
-            }
-        }
-        return clients;
+        return AdbCtl.activeClients();
     }
 
     /** 无线客户端检测 */
@@ -705,11 +627,21 @@ public class MainActivity extends Activity {
             }
 
             @Override
+            public void onServiceName(String name) {
+                // 拿到真实服务名后重画二维码，否则扫码时 adb 在 mDNS 里找不到这个服务
+                runOnUiThread(() -> {
+                    if (qr && !currentPairCode.isEmpty()) showPairQr(currentPairCode);
+                });
+            }
+
+            @Override
             public void onPaired(String ip2) {
                 runOnUiThread(() -> {
                     String client = ip2 != null ? ip2 : latestClientIp();
                     if (client != null && !client.isEmpty()) {
                         PairedDeviceStore.save(MainActivity.this, client, client);
+                        // 系统侧凭证 key 要等它写盘后才拿得到，后台补写，供「忘记」时解绑
+                        rememberSystemKey(client);
                     }
                     pairingHelper.stopPairing();
                     ivPairQr.setVisibility(View.GONE);
@@ -737,7 +669,10 @@ public class MainActivity extends Activity {
 
     /** 展示配对二维码；生成失败时隐藏并提示。 */
     private void showPairQr(String code) {
-        android.graphics.Bitmap bmp = QrUtil.pairingQr(pairingServiceName(), code, 512);
+        // 服务名优先用 mDNS 上 adbd 真实注册的那个，拿不到才退回 adb-<serial>
+        String svc = pairingHelper != null ? pairingHelper.pairingServiceName() : null;
+        if (svc == null || svc.isEmpty()) svc = fallbackPairingServiceName();
+        android.graphics.Bitmap bmp = QrUtil.pairingQr(svc, code, 512);
         if (bmp == null) {
             ivPairQr.setVisibility(View.GONE);
             toast("二维码生成失败，请使用配对码配对");
@@ -758,12 +693,59 @@ public class MainActivity extends Activity {
         Log.i(TAG, "adbd 已重启，配对码作废");
     }
 
-    /** 配对二维码里的服务名：adb-<serial>，与系统 mDNS 配对服务命名一致。 */
-    private String pairingServiceName() {
+    /**
+     * 配对二维码里的服务名兜底值：`adb-<serial>`。
+     * adbd 实际注册的 mDNS 名可能还带随机后缀，能用发现到的真名就别用它。
+     */
+    private String fallbackPairingServiceName() {
         String serial = execReadLine("getprop", "ro.serialno");
         if (serial == null) serial = "";
         serial = serial.trim();
         return serial.isEmpty() ? "adb" : "adb-" + serial;
+    }
+
+    /**
+     * 把刚配对上的设备与系统侧凭证 key 关联起来：
+     * 取「系统已配对列表里有、本地档案里没有」的那一个 key，写回本地档案。
+     */
+    private void rememberSystemKey(String name) {
+        new Thread(() -> {
+            java.util.List<String> keys = AdbCtl.pairedDeviceKeys();
+            java.util.List<String> known = PairedDeviceStore.knownKeys(MainActivity.this);
+            String fresh = "";
+            for (String k : keys) {
+                if (!known.contains(k)) {
+                    fresh = k;
+                    break;
+                }
+            }
+            if (fresh.isEmpty()) return;
+            final String key = fresh;
+            runOnUiThread(() -> PairedDeviceStore.updateKey(MainActivity.this, name, key));
+        }).start();
+    }
+
+    /**
+     * 忘记设备：**先删系统侧配对凭证**（等价开发者选项里的「忘记」），再移除本地档案。
+     * 只删本地记录的话，电脑那边的凭证还在、照样能连上，属于假解绑。
+     */
+    private void forgetDevice(PairedDeviceStore.Device d, android.widget.TextView forgetView) {
+        if (forgetView != null) forgetView.setEnabled(false);
+        new Thread(() -> {
+            String key = d.sysKey;
+            if ((key == null || key.isEmpty())) {
+                // 本地没记下 key：系统侧只有一条配对记录时可以确定就是它
+                java.util.List<String> keys = AdbCtl.pairedDeviceKeys();
+                if (keys.size() == 1) key = keys.get(0);
+            }
+            final String err = (key == null || key.isEmpty())
+                    ? "未找到系统配对记录，仅移除本地显示" : AdbCtl.unpairDevice(key);
+            runOnUiThread(() -> {
+                PairedDeviceStore.remove(MainActivity.this, d.name);
+                renderPairedDevices();
+                toast(err == null ? "已取消配对: " + d.name : err, true);
+            });
+        }).start();
     }
 
     /** 最近一个无线客户端 IP；没有连接时返回空串。 */
@@ -772,10 +754,34 @@ public class MainActivity extends Activity {
         return clients.isEmpty() ? "" : clients.get(0);
     }
 
-    /** 渲染「已配对的设备」列表，在线状态以当前客户端连接为准。 */
+    /**
+     * 渲染「已配对的设备」列表：本地档案 + 系统侧配对凭证（本地没记录的也列出来，
+     * 这样即使本地档案丢了，照样能解除系统里的配对）。在线状态以当前连接为准。
+     *
+     * 读系统列表涉及 binder 调用与连接扫描，放子线程，拿到结果再回主线程渲染。
+     */
     private void renderPairedDevices() {
-        java.util.List<PairedDeviceStore.Device> all = PairedDeviceStore.list(this);
-        java.util.List<String> online = getWirelessClients();
+        new Thread(() -> {
+            java.util.List<PairedDeviceStore.Device> rows =
+                    new java.util.ArrayList<>(PairedDeviceStore.list(MainActivity.this));
+            java.util.List<String> online = getWirelessClients();
+
+            java.util.Set<String> known = new java.util.HashSet<>();
+            for (PairedDeviceStore.Device d : rows) {
+                if (d.sysKey != null && !d.sysKey.isEmpty()) known.add(d.sysKey);
+            }
+            for (String k : AdbCtl.pairedDeviceKeys()) {
+                if (known.contains(k)) continue;
+                String shown = "系统密钥 " + (k.length() > 12 ? k.substring(0, 12) + "…" : k);
+                rows.add(new PairedDeviceStore.Device(shown, "", 0L, k));
+            }
+
+            runOnUiThread(() -> renderPairedRows(rows, online));
+        }).start();
+    }
+
+    private void renderPairedRows(java.util.List<PairedDeviceStore.Device> all,
+                                  java.util.List<String> online) {
         llPairedDevices.removeAllViews();
         tvPairedEmpty.setVisibility(all.isEmpty() ? View.VISIBLE : View.GONE);
 
@@ -804,10 +810,7 @@ public class MainActivity extends Activity {
             forget.setTextSize(14);
             forget.setTextColor(Color.parseColor("#1976D2"));
             forget.setPadding((int) (14 * density), 0, 0, 0);
-            forget.setOnClickListener(v -> {
-                PairedDeviceStore.remove(MainActivity.this, d.name);
-                renderPairedDevices();
-            });
+            forget.setOnClickListener(v -> forgetDevice(d, forget));
 
             row.addView(name);
             row.addView(state);
@@ -960,7 +963,6 @@ public class MainActivity extends Activity {
             @Override
             public void run() {
                 new Thread(() -> {
-                    updateUsbPowerStatus();
                     updateConnectionStatus();
                     // updateStatus() 会直接改 tvStatus 等控件，必须回主线程
                     runOnUiThread(() -> updateStatus());
@@ -981,7 +983,6 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        updateUsbPowerStatus();
         startUsbPolling();
     }
 
@@ -996,129 +997,6 @@ public class MainActivity extends Activity {
         super.onDestroy();
         if (pairingHelper != null) {
             pairingHelper.stopPairing();
-        }
-    }
-
-    /**
-     * USB 供电开关：与 USB 调试开关同一套机制——**等真实值确认后才切**。
-     *
-     * 拨动后开关会被系统切成新状态，这里先拨回拨动前的状态并置灰，
-     * 等供电节点读到目标值后由 {@link #updateUsbPowerSwitch} 一次性落定：
-     * - 成功 → 只切一次，切到目标状态；
-     * - 未生效 → 真实值还是拨动前的状态，开关原地不动，只提示未生效。
-     */
-    private void toggleUsbPower(String powerFile, Switch sw, String label, boolean target) {
-        String path = "/sys/devices/platform/usbpower/" + powerFile;
-        if (usbPowerBusy.contains(sw)) return;
-        usbPowerBusy.add(sw);
-
-        // 真实状态没确认前不假装生效
-        setSwitchChecked(sw, !target);
-        sw.setEnabled(false);
-
-        new Thread(() -> {
-            final int want = target ? 1 : 0;
-            int writeExit;
-            int actual;
-            try {
-                writeExit = writeUsbPower(path, want);
-                actual = waitForUsbPowerValue(path, want);
-            } catch (Exception e) {
-                Log.e(TAG, "USB供电控制失败", e);
-                final String msg = e.getMessage();
-                runOnUiThread(() -> {
-                    usbPowerBusy.remove(sw);
-                    updateUsbPowerSwitch(powerFile, sw);
-                    toast("控制失败: " + msg);
-                });
-                return;
-            }
-
-            final boolean applied = (actual == want);
-            final int finalActual = actual;
-            Log.i(TAG, "USB供电切换: " + powerFile + " 期望=" + want
-                    + " 实际=" + finalActual + " 写exit=" + writeExit
-                    + " 生效=" + applied);
-
-            runOnUiThread(() -> {
-                // 先解除 busy，让 updateUsbPowerSwitch 把开关落到真实状态
-                usbPowerBusy.remove(sw);
-                updateUsbPowerSwitch(powerFile, sw);
-                if (applied) {
-                    toast(label + (target ? "供电已开启" : "供电已关闭"));
-                } else {
-                    String state = finalActual == 1 ? "开" : finalActual == 0 ? "关" : "读取失败";
-                    toast("切换未生效（实际状态: " + state + "）", true);
-                }
-            });
-        }).start();
-    }
-
-    /** 供电节点写入后要过一会儿才回落，轮询等真实值到位，不能只 sleep 一次就判定。 */
-    private int waitForUsbPowerValue(String path, int want) {
-        for (int i = 0; i < USB_POWER_SETTLE_ROUNDS; i++) {
-            sleepQuietly(150);
-            int v = readUsbPowerValue(path);
-            if (v == want) return v;
-        }
-        return readUsbPowerValue(path);
-    }
-
-    private void updateUsbPowerStatus() {
-        updateUsbPowerSwitch("usb2power", swUsb2Power);
-        updateUsbPowerSwitch("usb31power", swUsb31Power);
-    }
-
-    private void updateUsbPowerSwitch(String powerFile, Switch sw) {
-        String path = "/sys/devices/platform/usbpower/" + powerFile;
-        int value = readUsbPowerValue(path);
-        runOnUiThread(() -> {
-            // 切换进行中：开关停在拨动前的状态，等真实值确认后再落定
-            if (usbPowerBusy.contains(sw)) return;
-            setSwitchChecked(sw, value == 1);
-            sw.setEnabled(value != -1);
-        });
-    }
-
-    private void ensureUsb2PowerDefaultOn() {
-        new Thread(() -> {
-            String path = "/sys/devices/platform/usbpower/usb2power";
-            int value = readUsbPowerValue(path);
-            if (value == 0) {
-                int exit = writeUsbPower(path, 1);
-                Log.i(TAG, "启动默认开启主驾USB1供电: 写入exit=" + exit);
-            } else {
-                Log.i(TAG, "启动检查主驾USB1供电: 当前=" + (value == 1 ? "已开启" : "未知"));
-            }
-            runOnUiThread(() -> new Thread(() -> updateUsbPowerStatus()).start());
-        }).start();
-    }
-
-    private int writeUsbPower(String path, int value) {
-        try {
-            java.lang.Process p = new ProcessBuilder("sh", "-c", "echo " + value + " > " + path).redirectErrorStream(true).start();
-            return p.waitFor();
-        } catch (Exception e) {
-            Log.e(TAG, "写入USB供电失败: " + path, e);
-            return -1;
-        }
-    }
-
-
-    private int readUsbPowerValue(String path) {
-        try {
-            java.lang.Process p = new ProcessBuilder("sh", "-c", "cat " + path).redirectErrorStream(true).start();
-            BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()));
-            String current = br.readLine();
-            p.waitFor();
-            if (current == null) return -1;
-            String t = current.trim();
-            if (t.equals("1")) return 1;
-            if (t.equals("0")) return 0;
-            return -1;
-        } catch (Exception e) {
-            Log.e(TAG, "读取USB供电失败: " + path, e);
-            return -1;
         }
     }
 

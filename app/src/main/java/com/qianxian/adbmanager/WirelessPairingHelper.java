@@ -42,15 +42,21 @@ public class WirelessPairingHelper {
     public static final String EXTRA_PAIRING_CODE = "pairing_code";
     public static final String EXTRA_ADB_PORT = "adb_port";
 
-    /** AdbManager.WIRELESS_STATUS_PAIRING_CODE */
+    /** AdbManager.WIRELESS_STATUS_PAIRING_CODE：配对结果广播，带 pairing_code */
     public static final int STATUS_PAIRING_CODE = 3;
-    /** AdbManager.WIRELESS_STATUS_CONNECTED */
-    public static final int STATUS_CONNECTED = 4;
+    /** AdbManager.WIRELESS_STATUS_ADB_PORT：配对结果广播，带配对端口 adb_port */
+    public static final int STATUS_ADB_PORT = 4;
+    /** AdbManager.WIRELESS_STATUS_CONNECTED：连接状态广播，客户端已连上 */
+    public static final int STATUS_CONNECTED = 5;
+    /** AdbManager.WIRELESS_STATUS_DISCONNECTED：连接状态广播，客户端已断开 */
+    public static final int STATUS_DISCONNECTED = 0;
 
     /** 配对服务在 mDNS 上注册的类型，用于兜底获取配对端口 */
     private static final String NSD_PAIRING_SERVICE_TYPE = "_adb-tls-pairing._tcp";
     private static final long PAIRING_TIMEOUT_MS = 15000;
     private static final long PORT_FALLBACK_DELAY_MS = 1200;
+    /** 配对码已给出后的最长保留时间：给电脑留出执行 `adb pair` 的窗口，到期自动取消配对。 */
+    private static final long PAIRING_LINGER_MS = 180000;
 
     public interface PairingCallback {
         void onPairingCode(String code, int port);
@@ -59,6 +65,10 @@ public class WirelessPairingHelper {
 
         /** 客户端完成配对并建立连接。ip 为对端 IP，可能为 null。 */
         default void onPaired(String ip) {
+        }
+
+        /** 拿到 mDNS 上真实的配对服务名（二维码要用它，不能靠拼字符串猜）。 */
+        default void onServiceName(String name) {
         }
     }
 
@@ -69,10 +79,14 @@ public class WirelessPairingHelper {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private Runnable timeoutRunnable;
     private Runnable portFallbackRunnable;
+    private Runnable lingerRunnable;
 
     private String pairingCode;
     private int pairingPort = -1;
     private boolean codeNotified;
+    private boolean pairedNotified;
+    /** mDNS 上真实的配对服务名（adbd 自己注册的），二维码必须用它。 */
+    private String pairingServiceName;
 
     private NsdManager nsdManager;
     private NsdManager.DiscoveryListener discoveryListener;
@@ -87,6 +101,8 @@ public class WirelessPairingHelper {
         this.pairingCode = null;
         this.pairingPort = -1;
         this.codeNotified = false;
+        this.pairedNotified = false;
+        this.pairingServiceName = null;
 
         try {
             android.provider.Settings.Global.putInt(
@@ -100,9 +116,14 @@ public class WirelessPairingHelper {
 
         timeoutRunnable = () -> {
             if (pairingCode != null) {
+                // 码已经给出去了，别马上取消配对——留一段时间给电脑执行 adb pair，
+                // 到期再收尾（否则配对服务会一直开着，等于长期暴露一个配对入口）。
                 Log.w(TAG, "超时未等到配对端口广播，使用当前已知端口=" + pairingPort);
                 notifyCode(pairingCode, pairingPort);
+                lingerRunnable = this::stopPairing;
+                handler.postDelayed(lingerRunnable, PAIRING_LINGER_MS);
             } else {
+                // 连码都没拿到：这次配对已经没有意义，必须 disablePairing 收尾
                 onError("系统未在超时内返回配对码（需 Android 11+ 且已开启开发者选项）");
             }
         };
@@ -123,9 +144,15 @@ public class WirelessPairingHelper {
         }
     }
 
+    /** mDNS 上真实的配对服务名；尚未发现到时返回 null（调用方用 `adb-<serial>` 兜底）。 */
+    public String pairingServiceName() {
+        return pairingServiceName;
+    }
+
     public void stopPairing() {
         handler.removeCallbacks(timeoutRunnable);
         handler.removeCallbacks(portFallbackRunnable);
+        handler.removeCallbacks(lingerRunnable);
         stopPortDiscovery();
         try {
             Object svc = getAdbManagerBinder();
@@ -153,8 +180,12 @@ public class WirelessPairingHelper {
 
         boolean isPairingResult = ACTION_WIRELESS_PAIRING_RESULT.equals(action);
 
-        // 有客户端连上（status=CONNECTED）即视为本次配对成功，交给上层记录设备
-        if (!isPairingResult && status == STATUS_CONNECTED && callback != null) {
+        // 有客户端连上即视为本次配对成功，交给上层记录设备。
+        // AOSP 里 CONNECTED=5；少数 ROM 会在状态广播上发 4（ADB_PORT），这里一并接受，
+        // 只回调一次，避免重复记录同一台设备。
+        if (!isPairingResult && (status == STATUS_CONNECTED || status == STATUS_ADB_PORT)
+                && !pairedNotified && callback != null) {
+            pairedNotified = true;
             callback.onPaired(intent.getStringExtra("client_ip"));
         }
 
@@ -231,6 +262,13 @@ public class WirelessPairingHelper {
                         Log.i(TAG, "非本机配对服务，忽略: " + name);
                         return;
                     }
+                    // 二维码里的服务名必须是 adbd 真实注册的这个，拼出来的名字对不上就扫不了
+                    if (name != null && !name.isEmpty()) {
+                        pairingServiceName = name;
+                        if (callback != null) {
+                            handler.post(() -> callback.onServiceName(name));
+                        }
+                    }
                     if (port <= 0) return;
                     pairingPort = port;
                     handler.post(() -> {
@@ -304,6 +342,7 @@ public class WirelessPairingHelper {
     private void unregister() {
         handler.removeCallbacks(timeoutRunnable);
         handler.removeCallbacks(portFallbackRunnable);
+        handler.removeCallbacks(lingerRunnable);
         stopPortDiscovery();
         if (receiver != null) {
             try { context.unregisterReceiver(receiver); } catch (Exception ignore) {}

@@ -43,6 +43,9 @@ public final class AdbCtl {
     /** 两次自动修复之间的最小间隔：adbd 重启有抖动，频繁重启会把连接反复打断。 */
     private static final long MIN_REPAIR_INTERVAL_MS = 15_000L;
 
+    /** netstat 不可用时的回退来源（toybox 精简的 ROM 上 netstat 可能不存在）。 */
+    private static final String PROC_NET_TCP = "/proc/net/tcp";
+
     private static long lastRepairMs = 0L;
 
     private AdbCtl() {
@@ -103,6 +106,97 @@ public final class AdbCtl {
     /** 属性值是否代表「端口已开启」。 */
     public static boolean isPortEnabled(String port) {
         return port != null && !port.isEmpty() && !port.equals(PORT_OFF) && !port.equals("0");
+    }
+
+    // ---------- 无线客户端（修复判定与界面共用同一套解析） ----------
+
+    /** adbd 当前监听的端口集合（无线调试的动态 TLS 端口 + 明文端口）。 */
+    public static java.util.Set<String> adbdPorts() {
+        java.util.Set<String> ports = new java.util.HashSet<>();
+        for (String p : new String[]{tlsPortProp(), wirelessPortProp()}) {
+            if (isPortEnabled(p)) ports.add(p);
+        }
+        return ports;
+    }
+
+    /**
+     * 当前连在 adbd 上的客户端 IP。
+     *
+     * 优先 `netstat -tn`；部分 ROM（含部分车机）的 toybox 不带 netstat，
+     * 此时回退解析 `/proc/net/tcp`（state=01 即 ESTABLISHED）。
+     */
+    public static java.util.List<String> activeClients() {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        java.util.Set<String> ports = adbdPorts();
+        if (ports.isEmpty()) return out;
+
+        List<String> lines = shell("netstat", "-tn");
+        if (lines.isEmpty()) {
+            lines = readLines(PROC_NET_TCP);
+        } else {
+            for (String line : lines) {
+                if (!line.contains("ESTABLISHED")) continue;
+                String[] f = line.trim().split("\\s+");
+                if (f.length < 5) continue;
+                collectClient(f[3], f[4], ports, out);
+            }
+            return out;
+        }
+
+        for (String line : lines) {
+            // /proc/net/tcp 格式： sl local_address rem_address st ...
+            String[] f = line.trim().split("\\s+");
+            if (f.length < 4 || !"01".equals(f[3])) continue;
+            collectClient(hexToIpPort(f[1]), hexToIpPort(f[2]), ports, out);
+        }
+        return out;
+    }
+
+    /** 是否已有客户端连在 adbd 上（有则不能重启 adbd，否则会掐断连接）。 */
+    public static boolean hasActiveClients() {
+        return !activeClients().isEmpty();
+    }
+
+    /** 从 "ip:port" 里取端口，命中 adbd 端口就把对端 IP 记下来。 */
+    private static void collectClient(String local, String peer,
+                                      java.util.Set<String> ports, java.util.List<String> out) {
+        if (local == null || peer == null) return;
+        int li = local.lastIndexOf(':');
+        int pi = peer.lastIndexOf(':');
+        if (li < 0 || pi < 0) return;
+        String localPort = local.substring(li + 1);
+        if (!ports.contains(localPort)) return;
+        String peerIp = peer.substring(0, pi);
+        // 去掉 IPv6 映射前缀，便于阅读
+        if (peerIp.startsWith("::ffff:")) peerIp = peerIp.substring(7);
+        if (!peerIp.equals("127.0.0.1") && !out.contains(peerIp)) out.add(peerIp);
+    }
+
+    /** /proc/net/tcp 里的 "010310AC:8AE0" → "1.3.16.172:35552"。 */
+    private static String hexToIpPort(String hex) {
+        if (hex == null) return "";
+        int i = hex.indexOf(':');
+        if (i < 0) return "";
+        try {
+            long ip = Long.parseLong(hex.substring(0, i), 16);
+            int port = Integer.parseInt(hex.substring(i + 1), 16);
+            // 地址在文件里是小端序
+            return (ip & 0xFF) + "." + ((ip >> 8) & 0xFF) + "." + ((ip >> 16) & 0xFF)
+                    + "." + ((ip >> 24) & 0xFF) + ":" + port;
+        } catch (NumberFormatException e) {
+            return "";
+        }
+    }
+
+    private static List<String> readLines(String path) {
+        List<String> out = new ArrayList<>();
+        try (BufferedReader br = new BufferedReader(new java.io.FileReader(path))) {
+            String line;
+            while ((line = br.readLine()) != null) out.add(line);
+        } catch (Exception e) {
+            Log.w(TAG, "读取失败: " + path + " → " + e.getMessage());
+        }
+        return out;
     }
 
     /** adbd 进程是否还活着；查不到进程列表时保守返回 true（宁肯不重启）。 */
@@ -187,10 +281,10 @@ public final class AdbCtl {
      */
     private static boolean waitForUsbState(boolean wantAdb) {
         for (int i = 0; i < CONFIG_SETTLE_ROUNDS; i++) {
-            if (effectiveUsbConfig().contains("adb") == wantAdb) return true;
+            if (hasAdbFunction(effectiveUsbConfig()) == wantAdb) return true;
             sleep(200);
         }
-        return effectiveUsbConfig().contains("adb") == wantAdb;
+        return hasAdbFunction(effectiveUsbConfig()) == wantAdb;
     }
 
     // ---------- 自动修复 ----------
@@ -214,6 +308,13 @@ public final class AdbCtl {
         boolean healthy = isWirelessOn(ctx) && isPortEnabled(port) && adbdAlive;
 
         if (healthy) return false;
+
+        // 有客户端在线就绝不动 adbd：修复动作会重启 adbd，正在用的连接会被掐断。
+        // 不依赖「端口还在监听」间接判断——属性被重置但连接还没断时也可能走到这里。
+        if (hasActiveClients()) {
+            Log.i(TAG, "有客户端在线，跳过自动修复（避免掐断正在使用的连接）");
+            return false;
+        }
 
         lastRepairMs = now;
         Log.w(TAG, String.format(
@@ -257,6 +358,59 @@ public final class AdbCtl {
         }
     }
 
+    /** 取 adb 系统服务的 Binder 代理；拿不到返回 null（缺少签名/ROM 不支持）。 */
+    private static Object adbService() {
+        try {
+            Class<?> sm = Class.forName("android.os.ServiceManager");
+            IBinder binder = (IBinder) sm.getMethod("getService", String.class).invoke(null, "adb");
+            if (binder == null) return null;
+            Class<?> stub = Class.forName("android.debug.IAdbManager$Stub");
+            return stub.getMethod("asInterface", IBinder.class).invoke(null, binder);
+        } catch (Exception e) {
+            Log.w(TAG, "获取 adb 系统服务失败: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /** 系统侧已配对设备的凭证 key 列表（开发者选项里那份）；读取失败返回空列表。 */
+    public static java.util.List<String> pairedDeviceKeys() {
+        java.util.List<String> keys = new java.util.ArrayList<>();
+        try {
+            Object svc = adbService();
+            if (svc == null) return keys;
+            Object res = svc.getClass().getMethod("getPairedDevices").invoke(svc);
+            if (!(res instanceof java.util.Map)) return keys;
+            for (Object k : ((java.util.Map<?, ?>) res).keySet()) {
+                if (k != null) keys.add(String.valueOf(k));
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "读取系统已配对设备失败: " + e.getMessage());
+        }
+        return keys;
+    }
+
+    /**
+     * 忘记（取消配对）某台设备：删除**系统侧**的配对凭证，等价于开发者选项里的「忘记」。
+     * 只删本地显示记录的话，电脑那边凭证还在、照样能连上，属于假解绑。
+     *
+     * @return null 表示成功；否则返回失败原因
+     */
+    public static String unpairDevice(String key) {
+        if (key == null || key.isEmpty()) return "缺少配对凭证 key";
+        try {
+            Object svc = adbService();
+            if (svc == null) return "无法获取 adb 系统服务";
+            svc.getClass().getMethod("unpairDevice", String.class).invoke(svc, key);
+            Log.i(TAG, "已删除系统侧配对凭证: " + key);
+            return null;
+        } catch (NoSuchMethodException e) {
+            return "系统不支持 unpairDevice(需 Android 11+)";
+        } catch (Exception e) {
+            Log.e(TAG, "unpairDevice 失败", e);
+            return "取消配对失败: " + e.getMessage();
+        }
+    }
+
     // ---------- 有线 USB 调试（分档，只动调试口那一个控制器） ----------
 
     /** 只启停 adbd：不动 composition、不动控制器角色，调试口不会重新枚举。 */
@@ -274,12 +428,42 @@ public final class AdbCtl {
     /** 默认档位：动到 composition 为止，不再切控制器角色。 */
     public static final int LEVEL_DEFAULT = LEVEL_CONFIG;
 
-    /**
-     * 关闭时写回 sys.usb.config 的值。
-     * 不用 mtp：这台车机 persist 就是纯 adb、没有 MTP function，
-     * 写 mtp 要么切换失败、要么反而把一个 MTP 设备暴露给电脑。
-     */
+    /** 摘掉 adb 后 composition 为空时写入的值。 */
     public static final String OFF_CONFIG_VALUE = "none";
+
+    /**
+     * 关闭时写回 sys.usb.config 的值：**从 persist 里摘掉 adb**，其余 function 原样保留。
+     *
+     * 这与原生开发者选项一致——原生是「移除 adb function」而不是把整口清空；
+     * 写死 none 会把 MTP 等一并关掉（这台车 persist 就是纯 adb，摘完为空才落到 none，行为不变）。
+     */
+    public static String offConfigValue() {
+        String persist = readProp("persist.sys.usb.config");
+        if (persist == null) persist = "";
+        persist = persist.trim();
+        if (persist.isEmpty()) return OFF_CONFIG_VALUE;
+        StringBuilder sb = new StringBuilder();
+        for (String f : persist.split(",")) {
+            String t = f.trim();
+            if (t.isEmpty() || "adb".equals(t) || OFF_CONFIG_VALUE.equals(t)) continue;
+            if (sb.length() > 0) sb.append(',');
+            sb.append(t);
+        }
+        String v = sb.toString();
+        return v.isEmpty() ? OFF_CONFIG_VALUE : v;
+    }
+
+    /**
+     * composition 里是否真的有 adb function。
+     * 按逗号切分后精确匹配，避免 `contains("adb")` 命中厂商自定义的相似 function 名。
+     */
+    public static boolean hasAdbFunction(String cfg) {
+        if (cfg == null || cfg.isEmpty()) return false;
+        for (String f : cfg.split(",")) {
+            if ("adb".equals(f.trim())) return true;
+        }
+        return false;
+    }
 
     /** 记住调试口是哪个控制器：一旦被切成 host 就认不出来了，靠这个不认错口。 */
     private static volatile String debugPortBase;
@@ -315,7 +499,7 @@ public final class AdbCtl {
      * 「设置里开着、但底层 adbd 没起来 / composition 没生效」会被当成已开启。
      */
     public static boolean isUsbAdbActive() {
-        return isAdbServiceRunning() && effectiveUsbConfig().contains("adb");
+        return isAdbServiceRunning() && hasAdbFunction(effectiveUsbConfig());
     }
 
     /**
@@ -394,7 +578,7 @@ public final class AdbCtl {
         }
 
         if (level >= LEVEL_CONFIG) {
-            String cfg = enabled ? onConfigValue() : OFF_CONFIG_VALUE;
+            String cfg = enabled ? onConfigValue() : offConfigValue();
             exec("setprop", "sys.usb.config", cfg);
             sleep(300);
         }

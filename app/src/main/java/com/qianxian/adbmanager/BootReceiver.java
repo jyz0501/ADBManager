@@ -20,19 +20,10 @@ public class BootReceiver extends BroadcastReceiver {
             // 统一用前台启动：AdbService 会在 onCreate 里立即 startForeground
             context.startForegroundService(svc);
 
-            // 开机默认关闭 USB 调试：只在这里执行一次。
-            // 早先这段挂在 Activity.onCreate 上，导致每次打开界面都把 USB 调试掐断一遍。
-            final Context app = context.getApplicationContext();
-            final PendingResult result = goAsync();
-            new Thread(() -> {
-                try {
-                    String err = AdbCtl.setUsbAdb(app, false);
-                    Log.i(TAG, "========== 开机默认策略：关闭 USB 调试 结果="
-                            + (err == null ? "成功" : err) + " ==========");
-                } finally {
-                    result.finish();
-                }
-            }).start();
+            // USB 调试不再开机强制关闭：与原生开发者选项一致，ADB_ENABLED 由系统持久化保存，
+            // 开机后由系统自己按保存的设置恢复（含 composition 与 adbd）。
+            // 这里只负责拉起保活服务，不再改动调试开关。
+            Log.i(TAG, "USB 调试状态交由系统持久化恢复，本应用不再干预");
         }
     }
 }

@@ -355,7 +355,7 @@
             </LinearLayout>
         </ScrollView>
 
-        <!-- 右栏：USB供电，底部为检查更新、退出与作者 -->
+        <!-- 右栏：系统（检测更新 / 退出）与作者 -->
         <ScrollView
             android:layout_width="0dp"
             android:layout_height="match_parent"
@@ -371,83 +371,10 @@
                 android:background="#2D2D2D"
                 android:padding="24dp">
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="USB 供电"
-                android:textSize="22sp"
-                android:textColor="#FFFFFF"
-                android:textStyle="bold"/>
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:layout_marginTop="16dp">
-
-                <TextView
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="主驾USB1"
-                    android:textSize="18sp"
-                    android:textColor="#FFFFFF"/>
-
-                <Switch
-                    android:id="@+id/sw_usb2_power"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:switchMinWidth="96dp"
-                    android:track="@drawable/switch_track"
-                    android:thumb="@drawable/switch_thumb"
-                    android:thumbTextPadding="10dp"
-                    android:showText="true"
-                    android:textOn="开"
-                    android:textOff="关"
-                    android:textSize="16sp"
-                    android:textColor="#FFFFFF"/>
-            </LinearLayout>
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:layout_marginTop="12dp">
-
-                <TextView
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="主驾USB2"
-                    android:textSize="18sp"
-                    android:textColor="#FFFFFF"/>
-
-                <Switch
-                    android:id="@+id/sw_usb31_power"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:switchMinWidth="96dp"
-                    android:track="@drawable/switch_track"
-                    android:thumb="@drawable/switch_thumb"
-                    android:thumbTextPadding="10dp"
-                    android:showText="true"
-                    android:textOn="开"
-                    android:textOff="关"
-                    android:textSize="16sp"
-                    android:textColor="#FFFFFF"/>
-            </LinearLayout>
-
             <View
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
                 android:layout_weight="1"/>
-
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:background="#3D3D3D"
-                android:layout_marginTop="24dp"
-                android:layout_marginBottom="16dp"/>
 
             <TextView
                 android:layout_width="wrap_content"

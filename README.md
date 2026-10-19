@@ -1,29 +1,28 @@
 # ADBManager
 
-车机（Android 系统）上的 ADB / 无线调试管理工具，附带 USB 供电控制、开机自启等系统级能力。
+车机（Android 系统）上的 ADB / 无线调试管理工具，附带开机自启等系统级能力。
 
 ## 界面布局（三栏）
 
 | 左栏 | 中栏 | 右栏 |
 |---|---|---|
-| USB 调试开关 + 底层状态 | 配对设备 / 配对码 / 配对端口 / 二维码 | USB 供电（主驾USB1 / 主驾USB2） |
-| 无线 ADB 开关 | 已配对设备 | （底部）检测更新 / 退出、作者信息 |
+| USB 调试开关 + 底层状态 | 配对设备 / 配对码 / 配对端口 / 二维码 | （底部）检测更新 / 退出、作者信息 |
+| 无线 ADB 开关 | 已配对设备 | |
 | 无线 ADB 状态（状态、IP:端口、无线客户端） | | |
 
 > 中栏与右栏各自独立上下滑动；三栏从上到下依次为：标题区 → 内容区（左：USB 调试 / 无线 ADB 开关；状态信息固定在左栏底部）→ 操作区。
 
 ## 功能
 
-- **USB ADB 开关**：切换系统 ADB 及 `adbd` 服务，开机时默认关闭一次。默认只切 `sys.usb.config`（`adb` ↔ `none`）与 `adbd`，**不再把调试口切成 host**；左栏实时显示底层 `config` / `adbd` / 调试口角色，设置项与底层不一致时该行变橙
-- **无线 ADB 开关**：开启/关闭系统无线调试（端口由 adbd 动态分配并 mDNS 广播，不再固定 5555），走**热切换**：只改 `adb_wifi_enabled` 让 adbd 自己起/停 TLS 监听，不杀进程，因此**不牵连有线 USB 调试，也无需二次确认**（少数 ROM 热切换不生效时才重启 adbd 兜底）；异步执行不阻塞 UI，实时显示已连接客户端
-- **开关交互（全部开关统一）**：USB 调试 / 无线 ADB / USB 供电都改为「**真实状态确认后才落定**」——拨动后开关先停在拨动前的状态并置灰、文案显示「开启中/关闭中」，后台轮询等底层真正生效，成功才切到目标状态，失败则原地不动并提示；期间轮询不会把开关掰回去，不留「看着开了其实没开」的假状态。动过 adbd 会作废配对码/配对端口，界面上的旧值会一并清除
+- **USB ADB 开关**：切换系统 ADB 及 `adbd` 服务。默认只切 `sys.usb.config`（加/去 `adb` function，摘完为空才落到 `none`）与 `adbd`，**不再把调试口切成 host**；开关状态由系统持久化保存（与原生开发者选项一致，不再开机强制关闭）；左栏实时显示底层 `config` / `adbd` / 调试口角色，设置项与底层不一致时该行变橙
+- **无线 ADB 开关**：开启/关闭系统无线调试（端口由 adbd 动态分配并 mDNS 广播，不再固定 5555），走**热切换**：只改 `adb_wifi_enabled` 让 adbd 自己起/停 TLS 监听，不杀进程，因此**不牵连有线 USB 调试，也无需二次确认**（少数 ROM 热切换不生效时才重启 adbd 兜底）；异步执行不阻塞 UI，实时显示已连接客户端。切换时会顺带把明文端口 `service.adb.tcp.port` 置 `-1`——原生只管 `adb_wifi_enabled`、不碰明文端口，这里是**刻意的安全强化**（关掉无需配对的明文入口），会断掉别人用 `adb tcpip 5555` 建立的连接
+- **开关交互（全部开关统一）**：USB 调试 / 无线 ADB 都改为「**真实状态确认后才落定**」——拨动后开关先停在拨动前的状态并置灰、文案显示「开启中/关闭中」，后台轮询等底层真正生效，成功才切到目标状态，失败则原地不动并提示；期间轮询不会把开关掰回去，不留「看着开了其实没开」的假状态。动过 adbd 会作废配对码/配对端口，界面上的旧值会一并清除
 - **无线 ADB 后台保活**：开关的状态会被记住（仅记住「用户上次是否希望开启」）。用户手动开启后，若被系统重置（熄屏省电、`adbd` 被杀、ROM 清理属性），`AdbService` 会在 10 秒级检测到并自动重开；用户手动关闭则不会被拉起
 - **撤销 USB 调试授权**：等同开发者选项里的同名按钮，通过 `IAdbManager.clearDebuggingKeys()` 清空系统 adb keystore；点按钮会先二次确认。执行后不重启 adbd（避免掐断正在调试的连接），被撤销的电脑下次连接时需重新确认授权
-- **无线调试配对码**：生成 6 位配对码（Android 11+）
-- **USB 供电控制**：主驾USB1 / 主驾USB2 两路供电节点滑块控制，带过流（OC）状态反馈
-- **主驾USB1 供电**：启动时默认开启；该口为 USB 调试端口，供电（VBUS 5V）与数据线独立，关闭供电不影响 ADB 调试
+- **无线调试配对码**：生成 6 位配对码（Android 11+），支持配对码与二维码两种方式；二维码里的服务名取 **mDNS 上 adbd 真实注册的那个**（拿不到才退回 `adb-<serial>`），避免扫码时 `adb` 找不到配对服务
+- **已配对设备 / 忘记设备**：列表 = 本地档案 + 系统侧配对凭证（本地档案丢失也能列出来）；点「忘记」会调 `IAdbManager.unpairDevice()` **删除系统里的配对凭证**，与原生一致——只删本地记录的话电脑照样能连，属于假解绑
 - **服务器更新检测（占位）**：从更新服务器拉取 `version.json` 检测新版本并自动下载安装（服务器地址暂为占位，见 `MainActivity.UPDATE_BASE_URL`）
-- **开机自启常驻**：开机通过前台服务拉起并监听 ADB 状态变化；开机时关闭一次 USB 调试（默认安全策略不变），此后不再反复关闭
+- **开机自启常驻**：开机通过前台服务拉起并监听 ADB 状态变化；**USB 调试状态不再被改写**，由系统按持久化的 `ADB_ENABLED` 自行恢复（与原生一致）
 
 ## USB 硬件接口边界
 
@@ -36,15 +35,14 @@
 
 - **控制器不写死**：启动时从 `/sys/class/udc` 探测，再按候选路径解析出 `mode` 节点，适配不同内核布局；写入后回读校验，失败会在界面上报。
 - `sys.usb.config` 虽然是全局属性，但 gadget 只挂在调试口那个 UDC 上，所以重新枚举只发生在调试口；host 那一路的 U 盘 / 4G 模组不经过 gadget，不受影响。
-- 关闭 USB 调试写 `none` 而不是 `mtp`：这类车机默认 composition 就是纯 `adb`，写 `mtp` 要么切换失败、要么反而把 MTP 暴露给电脑。
-- 供电（`usb2power` / `usb31power`）与数据角色是两套独立节点，关供电不影响 ADB 调试。
+- 关闭 USB 调试是「**从 composition 里摘掉 `adb`**」而不是清空整口：与原生开发者选项一致，MTP 等其它 function 会保留；摘完为空才落到 `none`（这台车 persist 就是纯 `adb`，实际结果与写 `none` 相同）。刻意不写 `mtp`：这类车机没有 MTP function，写 `mtp` 要么切换失败、要么反而把 MTP 暴露给电脑。
 
 ### 底层动作分档
 
 | 档位 | 动作 | 影响面 |
 |---|---|---|
 | `LEVEL_SILENT` | 只 `ctl.stop/start adbd` | 不重枚举，电脑侧仅 offline |
-| `LEVEL_CONFIG`（默认） | + `sys.usb.config` `adb` ↔ `none` | 调试口重新枚举一次，其他口不受影响 |
+| `LEVEL_CONFIG`（默认） | + `sys.usb.config` 加/去 `adb`（摘完为空才 `none`） | 调试口重新枚举一次，其他口不受影响 |
 | `LEVEL_ROLE` | + 控制器角色 `peripheral` ↔ `host` | 该口失去 device 能力，同口 CarLife/AOA 失效（预留档位，当前无 UI 入口） |
 
 另外，开启 USB 调试时若调试口正停在 `host`（这车冷上电就是 host），`applyUsbAdb` 会**自动拉回 `peripheral`**，因此不需要、也不提供手动切角色的入口。
@@ -56,15 +54,17 @@
 
 所以本应用**先切底层、最后再写设置项**。顺序反过来时，系统异步重算的结果会覆盖刚写入的 composition，导致开关结果与预期不符。
 
-### 默认关闭策略（仅开机执行一次）
+### USB 调试的持久化（与原生一致）
 
-收到 `BOOT_COMPLETED` / `QUICKBOOT_POWERON` 时关闭一次 USB 调试，**之后不再重复关闭**——打开界面、进程被系统回收后重建、升级 APK，都不再动 USB 调试。
+`Settings.Global.ADB_ENABLED` 由系统持久化保存，开机后系统自己按保存的值恢复（composition 与 `adbd` 一并恢复），本应用**不再在开机时改写它**。
 
-实现上由 `BootReceiver` 用 `goAsync()` 在后台线程执行，统一走 `AdbCtl.setUsbAdb()`（底层 + 设置项，设置项最后写）。
+`BootReceiver` 只负责拉起 `AdbService`，不再调 `AdbCtl.setUsbAdb(false)`。
 
-> 早先这段挂在 `MainActivity.onCreate` 上，导致**每次打开界面都把 USB 调试掐断一遍**，调试时得反复手动重开。
+> 历史行为：早期版本把「默认关闭」挂在 `MainActivity.onCreate` 上（每次开界面都掐断一遍），
+> 后来改为开机广播执行一次；**现版本已去掉**——与原生开发者选项保持一致，用户开了就一直是开的。
+> 若确实需要「每次上电都回到关闭」，在 `BootReceiver.onReceive()` 里补一次 `AdbCtl.setUsbAdb(app, false)` 即可。
 
-不给有线调试留豁免：开机时不判断是否有客户端在线。有线调试如需长期保留，请改用无线 ADB。
+> 注意：系统恢复 USB 调试后，插上电脑时仍需系统弹出「允许 USB 调试吗？」授权（车机 ROM 自带该弹窗）。
 
 ## 后台保活说明
 
@@ -145,6 +145,8 @@ adb install -r "$(ls -t bin/apk/ADBManager_v*.apk | head -1)"
 
 ## 版本历史
 
+- **v2.4.0**（2026-10-20）：对齐原生开发者选项——① 配对广播状态码修正：`WIRELESS_STATUS_CONNECTED` 由 4 改为 5（4 是 `WIRELESS_STATUS_ADB_PORT`，只在配对结果广播里带端口），原值导致 `onPaired` 不触发、已配对设备不会自动记录；② 二维码服务名改用 mDNS 上 adbd 真实注册的名字（拿不到才退回 `adb-<serial>`），避免扫码配对找不到服务；③ 「忘记设备」改为调 `IAdbManager.unpairDevice()` 删除系统侧配对凭证（原来只删本地显示，属于假解绑），列表合并展示系统侧凭证；④ 关闭 USB 调试由写死 `none` 改为「从 composition 摘掉 `adb`」，其它 function 保留；⑤ composition 判定改为按逗号精确匹配 `adb`；⑥ 配对超时后收尾 `disablePairing()`（拿到码时留 3 分钟给电脑执行 `adb pair` 再取消）；⑦ 自动修复显式跳过「有客户端在线」的时刻；⑧ 无线客户端解析在 `netstat` 不可用时回退 `/proc/net/tcp`；⑨ **开机不再强制关闭 USB 调试**，状态交由系统持久化恢复；⑩ `minSdkVersion` 提到 30（无线调试为 Android 11+ 能力）
+- **v2.3.0**（2026-10-19）：移除「USB 供电控制」——右栏不再有主驾USB1 / 主驾USB2 供电开关，同时移除 `MainActivity` 里的 `toggleUsbPower` / `updateUsbPowerStatus` / `updateUsbPowerSwitch` / `ensureUsb2PowerDefaultOn` / `writeUsbPower` / `readUsbPowerValue` 及 `usbPowerBusy`、`USB_POWER_SETTLE_ROUNDS`；不再读写 `/sys/devices/platform/usbpower/*` 节点，启动时也不再默认开启主驾USB1 供电
 - **v2.2.0+（构建）**：`build.sh` 增加密钥自检与产物回验——构建前校验 pk8/x509 是否为同一对密钥、打印所用证书 SHA-256，签名后回验 APK 指纹与 v1/v2 有效性，不一致即构建失败；新增 `USE_AOSP_TESTKEY=1`（强制只用 AOSP 公签，独立缓存并校验指纹）、`PLATFORM_PK8` / `PLATFORM_PEM` / `PLATFORM_KS` 系列环境变量；使用 AOSP 公签时给出适用 ROM 提示
 - **v2.2.0**（2026-09-27）：无线 ADB 改为**热切换**（`AdbCtl.applyWirelessHot()`：只改 `adb_wifi_enabled`，等 adbd 自己起/停 TLS 监听，不动进程），不再无条件重启 adbd，因此切无线不再牵连有线 USB 调试；据此移除切换无线前的「会断开有线调试」二次确认（下发未生效时回退开关到拨动前状态）；USB 调试、USB 供电开关统一改为「真实状态确认后才落定」（先停在旧状态 + 置灰 + 「开启中/关闭中」，轮询等底层生效，失败原地回退），新增 `adbSwitchBusy` / `usbPowerBusy` 避免轮询把进行中的开关掰回去；新增 `AdbCtl.wirelessNeedsAdbd()`；动过 adbd 后清除界面上的旧配对码与配对端口
 - **v2.1.0**（2026-09-23）：移除右栏「主驾USB1 角色」开关及其 `AdbCtl.setDebugPortRole()`——开启 USB 调试时 `applyUsbAdb` 会自动把停在 host 的调试口拉回 peripheral，手动切回已无意义，而主动切 host 是破坏性操作且无日常场景；角色状态看左栏底层状态行的「调试口」即可。作为补偿，2 秒轮询改为刷新 `updateStatus()`，左栏那行保持实时
