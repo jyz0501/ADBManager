@@ -42,15 +42,21 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" \
             "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
-      # 可选：配置了 Secrets 时用厂商私有 platform key；Secrets 为空会生成空文件，
-      # build.sh 检测到空文件后自动下载 AOSP 公开 platform 测试密钥继续构建。
-      - name: Restore private platform signing keys from Secrets (optional)
+      # 正式版签名密钥：Secrets 里的 PLATFORM_KS_B64 是 sign/platform.jks 的 base64。
+      # 公签版无需 Secret，build.sh 会自动下载 AOSP 公开 platform 测试密钥并单独签名。
+      - name: Restore self-signed platform keystore from Secrets (optional)
         run: |
           mkdir -p "${{ github.workspace }}/sign"
-          echo "${{ secrets.PLATFORM_PK8_B64 }}" | base64 -d > "${{ github.workspace }}/sign/platform.pk8"
-          echo "${{ secrets.PLATFORM_PEM_B64 }}" | base64 -d > "${{ github.workspace }}/sign/platform.x509.pem"
-          chmod 600 "${{ github.workspace }}/sign/platform.pk8" "${{ github.workspace }}/sign/platform.x509.pem"
+          if [ -n "${{ secrets.PLATFORM_KS_B64 }}" ]; then
+            echo "${{ secrets.PLATFORM_KS_B64 }}" | base64 -d > "${{ github.workspace }}/sign/platform.jks"
+            chmod 600 "${{ github.workspace }}/sign/platform.jks"
+          else
+            echo "PLATFORM_KS_B64 未配置，本次只构建公签版。"
+          fi
 
+      # 一次构建产出两个 APK（均为 v1+v2 签名）：
+      #   正式版  ADBManager_v版本_日期.apk           （自签/厂商 platform.jks）
+      #   公签版  ADBManager_v版本_日期_aosp-testkey.apk（AOSP testkey）
       - name: Build & sign APK
         run: bash ./build.sh
 

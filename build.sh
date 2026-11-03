@@ -47,8 +47,12 @@ AOSP_KEY_BASE_MIRROR="${AOSP_KEY_BASE_MIRROR:-https://raw.githubusercontent.com/
 # AOSP 公开测试密钥的证书指纹：检测到用它时会给出提示（量产 ROM 装不上）。
 AOSP_TESTKEY_SHA256="C8A2E9BCCF597C2FB6DC66BEE293FC13F2FC47EC77BC6B2B0D52C11F51192AB8"
 
-SIGN_MODE=""   # pk8 | ks：实际使用的密钥形态
-SIGN_FPR=""    # 期望的签名证书 SHA-256（构建后用来核对产物）
+# 正式版使用本地 platform 密钥（pk8/pem 或 keystore）；
+# 公签版固定使用 AOSP 公开测试密钥（独立缓存，两版互不影响）。
+LOCAL_SIGN_MODE=""  # 正式版密钥形态：pk8 | ks
+LOCAL_KEY_OK=0      # 是否存在本地 platform 密钥（决定正式版能否构建）
+LOCAL_FPR=""        # 正式版签名证书 SHA-256
+AOSP_FPR=""         # 公签版签名证书 SHA-256
 
 # 指纹统一格式：大写、无冒号，便于字符串比较。
 normFpr() { tr -d ' :' | tr 'a-f' 'A-F'; }
@@ -73,54 +77,49 @@ downloadAospKeys() {
     return 1
 }
 
-# 确保签名密钥就位：优先本地密钥，缺失时从 AOSP 仓库下载公开 platform 密钥。
-ensureSigningKeys() {
+# 确保本地 platform 密钥就位（正式版用）；缺失时不报错，只标记跳过正式版。
+ensureLocalPlatformKey() {
     mkdir -p "$SIGN_DIR"
 
-    # 明确要求「只用公签」时，忽略 sign/ 里可能存在的私有密钥。
-    if [ "${USE_AOSP_TESTKEY:-0}" = "1" ]; then
-        mkdir -p "$AOSP_DIR"
-        if [ "$(pemSha256 "$AOSP_DIR/platform.x509.pem")" != "$AOSP_TESTKEY_SHA256" ]; then
-            echo "正在下载 AOSP 公签证书 -> $AOSP_DIR ..."
-            downloadAospKeys "$AOSP_DIR" || {
-                echo "错误: 无法获取 AOSP 公签证书(网络不可达或源已变更)。" >&2
-                exit 1
-            }
-        fi
-        PK8="$AOSP_DIR/platform.pk8"
-        PEM="$AOSP_DIR/platform.x509.pem"
-        SIGN_MODE="pk8"
-        echo "签名密钥: USE_AOSP_TESTKEY=1，强制使用 AOSP 公签证书 ($AOSP_DIR)"
-        return 0
-    fi
-
     if [ -s "$PK8" ] && [ -s "$PEM" ]; then
-        SIGN_MODE="pk8"
-        echo "签名密钥: 使用本地 platform 密钥 私钥=$PK8 证书=$PEM"
+        LOCAL_SIGN_MODE="pk8"
+        LOCAL_KEY_OK=1
+        echo "正式版签名密钥: 本地 platform 密钥 私钥=$PK8 证书=$PEM"
         return 0
     fi
     if [ -s "$KS" ]; then
-        SIGN_MODE="ks"
-        echo "签名密钥: 使用本地 keystore $KS (alias=$KS_ALIAS)"
+        LOCAL_SIGN_MODE="ks"
+        LOCAL_KEY_OK=1
+        echo "正式版签名密钥: 本地 keystore $KS (alias=$KS_ALIAS)"
         return 0
     fi
-    echo "未发现本地 platform 密钥，正在下载 AOSP 公开 platform 测试密钥..."
-    SIGN_MODE="pk8"
-    if downloadAospKeys "$SIGN_DIR"; then
-        echo "签名密钥: 已下载 AOSP 公签证书 -> $SIGN_DIR"
-        return 0
-    fi
-    echo "错误: 无法获取 platform 签名密钥(网络不可达或源已变更)。" >&2
-    echo "可手动放置 platform.pk8 / platform.x509.pem 到 $SIGN_DIR, 或用 AOSP_KEY_BASE 指定其它源。" >&2
-    exit 1
+    LOCAL_KEY_OK=0
+    echo "提示: 未发现本地 platform 密钥($PK8 / $KS)，本次只构建公签版，跳过正式版。" >&2
+    echo "      可手动放置 platform.pk8 / platform.x509.pem 到 $SIGN_DIR 后重新构建。" >&2
 }
 
-# 读出即将使用的签名证书指纹，供构建后核对（避免"以为换了 key，产物其实还是旧的"）。
-resolveSigningFingerprint() {
-    if [ "$SIGN_MODE" = "ks" ]; then
-        SIGN_FPR="$(keytool -list -v -keystore "$KS" -storepass "$KS_STORE_PASS" -alias "$KS_ALIAS" 2>/dev/null \
-            | sed -n 's/.*SHA256: *//p' | head -1 | normFpr)"
-        [ -n "$SIGN_FPR" ] || {
+# 确保 AOSP 公签证书就位（公签版用），缺失时自动下载到独立缓存目录。
+ensureAospKeys() {
+    mkdir -p "$AOSP_DIR"
+    if [ "$(pemSha256 "$AOSP_DIR/platform.x509.pem")" != "$AOSP_TESTKEY_SHA256" ]; then
+        echo "正在下载 AOSP 公签证书 -> $AOSP_DIR ..."
+        downloadAospKeys "$AOSP_DIR" || {
+            echo "错误: 无法获取 AOSP 公签证书(网络不可达或源已变更)。" >&2
+            exit 1
+        }
+    fi
+    AOSP_FPR="$(pemSha256 "$AOSP_DIR/platform.x509.pem")"
+    echo "公签版签名密钥: AOSP 公签证书 ($AOSP_DIR)"
+    echo "公签版签名证书 SHA-256: $AOSP_FPR"
+}
+
+# 读出正式版签名证书指纹，供构建后核对（避免"以为换了 key，产物其实还是旧的"）。
+resolveLocalFingerprint() {
+    local fpr=""
+    if [ "$LOCAL_SIGN_MODE" = "ks" ]; then
+        fpr="$(keytool -list -v -keystore "$KS" -storepass "$KS_STORE_PASS" -alias "$KS_ALIAS" 2>/dev/null \
+            | awk '/SHA256:/ {sub(/.*SHA256: */,""); print; exit}' | normFpr)"
+        [ -n "$fpr" ] || {
             echo "错误: 无法从 keystore 读取证书，请检查 PLATFORM_KS_ALIAS / PLATFORM_KS_STORE_PASS。" >&2
             exit 1
         }
@@ -139,12 +138,13 @@ resolveSigningFingerprint() {
             echo "错误: 私钥与证书不是同一对密钥（$PK8 与 $PEM 不匹配）。" >&2
             exit 1
         }
-        SIGN_FPR="$(openssl x509 -in "$PEM" -outform DER 2>/dev/null | dgstHex)"
-        echo "密钥配对校验通过（公钥指纹 $(printf '%s' "$pubFromKey" | cut -c1-16)…）"
+        fpr="$(openssl x509 -in "$PEM" -outform DER 2>/dev/null | dgstHex)"
+        echo "正式版密钥配对校验通过（公钥指纹 $(printf '%s' "$pubFromKey" | cut -c1-16)…）"
     fi
-    echo "签名证书 SHA-256: $SIGN_FPR"
-    if [ "$SIGN_FPR" = "$AOSP_TESTKEY_SHA256" ]; then
-        echo "提示: 当前是 AOSP 公签证书，只能装在使用 test-keys 的 ROM 上；"
+    LOCAL_FPR="$fpr"
+    echo "正式版签名证书 SHA-256: $LOCAL_FPR"
+    if [ "$LOCAL_FPR" = "$AOSP_TESTKEY_SHA256" ]; then
+        echo "提示: 正式版密钥是 AOSP 公签证书，只能装在使用 test-keys 的 ROM 上；"
         echo "      量产 ROM(release-keys) 的车机会因签名不匹配装不上，需换该车型的 platform 私钥。"
     fi
 }
@@ -165,8 +165,9 @@ for tool in "$AAPT" "$D8" "$ZIPALIGN" "$ANDROID_JAR" "$APKSIGNER" "$ZXING_JAR"; 
     fi
 done
 
-ensureSigningKeys
-resolveSigningFingerprint
+ensureLocalPlatformKey
+[ "$LOCAL_KEY_OK" = 1 ] && resolveLocalFingerprint
+ensureAospKeys
 
 rm -rf "$ROOT/bin" "$GEN_DIR"
 mkdir -p "$ROOT/bin/classes" "$ROOT/bin/apk" "$GEN_DIR" "$ASSETS_DIR"
@@ -217,50 +218,81 @@ cd "$ROOT"
 echo "Step 6: Zipalign（4 字节对齐）..."
 "$ZIPALIGN" -f 4 "$ROOT/bin/apk/unsigned.apk" "$ROOT/bin/apk/aligned.apk"
 
-echo "Step 7: 用 platform 密钥签名..."
-if [ "$SIGN_MODE" = "ks" ]; then
-    java -jar "$APKSIGNER" sign \
-        --ks "$KS" \
-        --ks-key-alias "$KS_ALIAS" \
-        --ks-pass "pass:$KS_STORE_PASS" \
-        --key-pass "pass:$KS_KEY_PASS" \
-        --v1-signing-enabled true \
-        --v2-signing-enabled true \
-        --v3-signing-enabled false \
-        --v4-signing-enabled false \
-        --out "$ROOT/bin/apk/$APK_NAME" \
-        "$ROOT/bin/apk/aligned.apk"
-else
-    java -jar "$APKSIGNER" sign \
-        --key "$PK8" \
-        --cert "$PEM" \
-        --v1-signing-enabled true \
-        --v2-signing-enabled true \
-        --v3-signing-enabled false \
-        --v4-signing-enabled false \
-        --out "$ROOT/bin/apk/$APK_NAME" \
-        "$ROOT/bin/apk/aligned.apk"
-fi
+# ---------- 签名与校验（两版共用，均启用 v1+v2 签名方案） ----------
+SIGN_COMMON_ARGS=(--v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled false --v4-signing-enabled false)
 
-echo "Step 8: 校验产物签名..."
-VERIFY_OUT="$(java -jar "$APKSIGNER" verify -v --print-certs "$ROOT/bin/apk/$APK_NAME" 2>&1)" || {
-    echo "$VERIFY_OUT" >&2
-    echo "错误: 产物签名校验失败。" >&2
-    exit 1
+# signApk <输出APK> <keyset: local|aosp>
+signApk() {
+    local out="$1" keyset="$2"
+    if [ "$keyset" = "aosp" ]; then
+        java -jar "$APKSIGNER" sign \
+            --key "$AOSP_DIR/platform.pk8" \
+            --cert "$AOSP_DIR/platform.x509.pem" \
+            "${SIGN_COMMON_ARGS[@]}" \
+            --out "$out" "$ROOT/bin/apk/aligned.apk"
+    elif [ "$LOCAL_SIGN_MODE" = "ks" ]; then
+        java -jar "$APKSIGNER" sign \
+            --ks "$KS" \
+            --ks-key-alias "$KS_ALIAS" \
+            --ks-pass "pass:$KS_STORE_PASS" \
+            --key-pass "pass:$KS_KEY_PASS" \
+            "${SIGN_COMMON_ARGS[@]}" \
+            --out "$out" "$ROOT/bin/apk/aligned.apk"
+    else
+        java -jar "$APKSIGNER" sign \
+            --key "$PK8" \
+            --cert "$PEM" \
+            "${SIGN_COMMON_ARGS[@]}" \
+            --out "$out" "$ROOT/bin/apk/aligned.apk"
+    fi
 }
-APK_FPR="$(printf '%s\n' "$VERIFY_OUT" \
-    | sed -n 's/.*certificate SHA-256 digest: //p' | head -1 | normFpr)"
-printf '%s\n' "$VERIFY_OUT" | grep -E "^(Verifies|Verified using)|DN:" || true
-if [ -n "$SIGN_FPR" ] && [ "$APK_FPR" != "$SIGN_FPR" ]; then
-    echo "错误: 产物指纹($APK_FPR)与签名密钥指纹($SIGN_FPR)不一致，请检查密钥是否被替换。" >&2
-    exit 1
+
+# verifyApk <APK> <期望指纹> <标签>
+# 注意：不用 head -1 / grep -q 提前关闭管道，set -o pipefail 下会触发 SIGPIPE 静默退出。
+verifyApk() {
+    local apk="$1" want="$2" label="$3"
+    local verify_out apk_fpr keytool_out
+    verify_out="$(java -jar "$APKSIGNER" verify -v --print-certs "$apk" 2>&1 || true)"
+    apk_fpr="$(printf '%s\n' "$verify_out" \
+        | awk '/certificate SHA-256 digest:/ {sub(/.*certificate SHA-256 digest: */,""); print; exit}' | normFpr)"
+    if [ -z "$apk_fpr" ]; then
+        # apksigner 拒绝校验时，回退用 keytool 直接读取 v1(JAR) 签名证书。
+        keytool_out="$(keytool -printcert -jarfile "$apk" 2>/dev/null)" || true
+        apk_fpr="$(printf '%s\n' "$keytool_out" \
+            | awk '/SHA256:/ {sub(/.*SHA256: */,""); print; exit}' | normFpr)"
+    fi
+    [ -n "$apk_fpr" ] || {
+        echo "错误: $label 无法读取签名证书指纹。" >&2
+        exit 1
+    }
+    if [ "$apk_fpr" != "$want" ]; then
+        echo "错误: $label 产物指纹($apk_fpr)与签名密钥指纹($want)不一致，请检查密钥是否被替换。" >&2
+        exit 1
+    fi
+    echo "$label 签名校验通过，指纹: $apk_fpr"
+}
+
+# Step 7a: 正式版（本地 platform 密钥，v1+v2）
+if [ "${USE_AOSP_TESTKEY:-0}" = "1" ]; then
+    echo "USE_AOSP_TESTKEY=1：按要求跳过正式版，仅构建公签版。"
+elif [ "$LOCAL_KEY_OK" = 1 ]; then
+    echo "Step 7a: 正式版签名（本地 platform 密钥，v1+v2）..."
+    signApk "$ROOT/bin/apk/$APK_NAME" local
+    verifyApk "$ROOT/bin/apk/$APK_NAME" "$LOCAL_FPR" "正式版"
+    echo "正式版产物: $ROOT/bin/apk/$APK_NAME"
+else
+    echo "跳过正式版（无本地 platform 密钥）。"
 fi
-echo "产物签名校验通过，指纹: $APK_FPR"
 
-echo "Signed   APK: $ROOT/bin/apk/$APK_NAME"
-
+# Step 7b: 公签版（AOSP testkey，v1+v2）
+TESTKEY_APK_NAME="ADBManager_v${VERSION_NAME}_${BUILD_DATE}_aosp-testkey.apk"
+echo "Step 7b: 公签版签名（AOSP testkey，v1+v2）..."
+signApk "$ROOT/bin/apk/$TESTKEY_APK_NAME" aosp
+verifyApk "$ROOT/bin/apk/$TESTKEY_APK_NAME" "$AOSP_FPR" "公签版"
+echo "公签版产物: $ROOT/bin/apk/$TESTKEY_APK_NAME"
+echo "提示: 公签版只能装在使用 test-keys 的 ROM 上，量产 ROM(release-keys) 车机会因签名不匹配装不上。"
 
 rm -f "$ROOT/bin/apk/unsigned.apk" \
       "$ROOT/bin/apk/aligned.apk" \
       "$ROOT/bin/apk/classes.dex"
-echo "已清理中间产物，最终产物: $ROOT/bin/apk/$APK_NAME"
+echo "已清理中间产物。"
