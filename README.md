@@ -145,6 +145,7 @@ adb install -r "$(ls -t bin/apk/ADBManager_v*.apk | head -1)"
 
 ## 版本历史
 
+- **v2.4.2**（2026-11-05）（构建）：重新构建发布，功能同 v2.4.1，仍为「自签正式版 + AOSP 公签版」双 APK 输出，可直接覆盖升级
 - **v2.4.1**（2026-11-04）（构建）：`build.sh` 改为双版本签名输出——同一次构建产出「自签正式版」与「AOSP 公签版」两个 APK，均带 v1+v2 签名，公签版独立缓存密钥并校验指纹，产物名以 `_aosp-testkey` 后缀区分；Release 同时附上两个 APK，按车机 ROM 签名需求自选
 - **v2.4.0**（2026-10-20）：对齐原生开发者选项——① 配对广播状态码修正：`WIRELESS_STATUS_CONNECTED` 由 4 改为 5（4 是 `WIRELESS_STATUS_ADB_PORT`，只在配对结果广播里带端口），原值导致 `onPaired` 不触发、已配对设备不会自动记录；② 二维码服务名改用 mDNS 上 adbd 真实注册的名字（拿不到才退回 `adb-<serial>`），避免扫码配对找不到服务；③ 「忘记设备」改为调 `IAdbManager.unpairDevice()` 删除系统侧配对凭证（原来只删本地显示，属于假解绑），列表合并展示系统侧凭证；④ 关闭 USB 调试由写死 `none` 改为「从 composition 摘掉 `adb`」，其它 function 保留；⑤ composition 判定改为按逗号精确匹配 `adb`；⑥ 配对超时后收尾 `disablePairing()`（拿到码时留 3 分钟给电脑执行 `adb pair` 再取消）；⑦ 自动修复显式跳过「有客户端在线」的时刻；⑧ 无线客户端解析在 `netstat` 不可用时回退 `/proc/net/tcp`；⑨ **开机不再强制关闭 USB 调试**，状态交由系统持久化恢复；⑩ `minSdkVersion` 提到 30（无线调试为 Android 11+ 能力）
 - **v2.3.0**（2026-10-19）：移除「USB 供电控制」——右栏不再有主驾USB1 / 主驾USB2 供电开关，同时移除 `MainActivity` 里的 `toggleUsbPower` / `updateUsbPowerStatus` / `updateUsbPowerSwitch` / `ensureUsb2PowerDefaultOn` / `writeUsbPower` / `readUsbPowerValue` 及 `usbPowerBusy`、`USB_POWER_SETTLE_ROUNDS`；不再读写 `/sys/devices/platform/usbpower/*` 节点，启动时也不再默认开启主驾USB1 供电
