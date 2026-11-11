@@ -42,28 +42,17 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" \
             "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
-      # 正式版签名密钥：Secrets 里的 PLATFORM_KS_B64 是 sign/platform.jks 的 base64。
-      # 公签版无需 Secret，build.sh 会自动下载 AOSP 公开 platform 测试密钥并单独签名。
-      - name: Restore self-signed platform keystore from Secrets (optional)
-        run: |
-          mkdir -p "${{ github.workspace }}/sign"
-          if [ -n "${{ secrets.PLATFORM_KS_B64 }}" ]; then
-            echo "${{ secrets.PLATFORM_KS_B64 }}" | base64 -d > "${{ github.workspace }}/sign/platform.jks"
-            chmod 600 "${{ github.workspace }}/sign/platform.jks"
-          else
-            echo "PLATFORM_KS_B64 未配置，本次只构建公签版。"
-          fi
+      # 无需 Secret：build.sh 会自动下载 AOSP 公开 platform 测试密钥并签名。
 
-      # 一次构建产出两个 APK（均为 v1+v2 签名）：
-      #   正式版  ADBManager_v版本_日期.apk           （自签/厂商 platform.jks）
-      #   公签版  ADBManager_v版本_日期_aosp-testkey.apk（AOSP testkey）
+      # 一次构建产出一个 APK（v1+v2 签名，AOSP platform 公签）：
+      #   ADBManager_v版本_日期_AOSP-Platform.apk
       - name: Build & sign APK
         run: bash ./build.sh
 
       - name: Upload signed APK (7 days)
         uses: actions/upload-artifact@v4
         with:
-          name: ADBManager_signed
+          name: ADBManager_AOSP-Platform
           path: bin/apk/ADBManager_v*.apk
           retention-days: 7
           if-no-files-found: error
