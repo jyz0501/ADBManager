@@ -57,6 +57,32 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+      # 推送 main 时自动发布：从 manifest 读取版本号，tag 为 v版本号。
+      # 同版本重复构建会先删除旧 Release，保证 Release 始终指向最新提交的产物。
+      - name: Read version from manifest
+        if: github.ref == 'refs/heads/main'
+        run: |
+          VERSION="$(sed -n 's/.*android:versionName="\([^"]*\)".*/\1/p' app/src/main/AndroidManifest.xml | head -1)"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "构建版本: v$VERSION"
+
+      - name: Delete existing auto release (same version)
+        if: github.ref == 'refs/heads/main'
+        run: gh release delete "v${{ env.VERSION }}" --yes --cleanup-tag || true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+
+      - name: Create Release (auto on push to main)
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: ADBManager v${{ env.VERSION }}
+          files: bin/apk/ADBManager_v*.apk
+          generate_release_notes: true
+
+      # 打 tag（v*）或手动触发时发布到指定 tag。
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.release_tag != ''
         uses: softprops/action-gh-release@v2
